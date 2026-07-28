@@ -53,18 +53,37 @@ plugins:
         max_agents: 1000              # Max total agents per run (runaway guard)
         workflow_timeout_seconds: 900 # Wall-clock timeout for the whole run (excludes paused time)
         child_timeout_seconds: 300    # Timeout for a single child agent
-        blocked_child_toolsets: [workflow, delegation, code_execution, memory, messaging, clarify]
+        blocked_child_toolsets: [workflow, workflows, delegation, code_execution, messaging, clarify]
                                       # Toolsets child agents are forbidden to use
         default_child_toolsets: [web, file, terminal, skills]
                                       # Default toolsets for child agents (used when no agentType is given)
         keep_worktrees: false         # Whether to keep each agent's git worktree (auto-cleaned by default)
         allow_model_override: true    # Whether agent(model=...) may override the model
+
+        initial_orchestrator_model: inherit
+        worker_model: inherit
+        reviewer_model: inherit
+        repair_worker_model: inherit
+        final_orchestrator_model: inherit
+        initial_orchestrator_agent_type: initial-orchestrator
+        worker_agent_type: worker
+        reviewer_agent_type: reviewer
+        repair_worker_agent_type: repair-worker
+        final_orchestrator_agent_type: final-orchestrator
+                                      # Logical reviewed-workflow role routing
+
         require_launch_approval: true # Require confirmation before a top-level workflow launches (denied if nobody is online)
         child_approval_policy: inherit # Child agent approval policy: inherit|smart|deny|approve|ask
         ask_fallback: smart           # Fallback when "ask" has no one to reach: smart|deny|approve
         notify_on_complete: true      # Notify the originating CLI or gateway session on completion
         notify_result_preview_chars: 2000  # Truncation length (chars) for the result preview in notifications
 ```
+
+For a canonical reviewed-workflow role, model precedence is: an explicit workflow
+`model` override (including a phase model) → the role's configured model → the selected
+agentType's model → the launching Hermes session model. `inherit` skips that level.
+Provider-specific model names remain configuration values; orchestration code does not
+hardcode providers or models.
 
 ## Script API
 
@@ -105,13 +124,22 @@ Specify a child agent's type via `agentType` in the script; if omitted, it defau
 | `explore` | Read-only (read_file, search_files, terminal) | Fast codebase exploration; good for locating files and searching keywords |
 | `plan` | Read-only (read_file, search_files, terminal) | Software architecture design; outputs a step-by-step implementation plan |
 | `verification` | web + file + terminal + browser | Verifies implementation correctness; runs build/test/lint to emit PASS/FAIL |
+| `initial-orchestrator` | Read-only file + terminal | Creates bounded task packets plus separate worker and reviewer guidance |
+| `worker` | `*` (all safe tools) | Executes exactly one scoped task packet and returns evidence without self-approval |
+| `reviewer` | Read-only file + terminal | Evaluates one attempt and returns evidence-backed PASS, FAIL, or BLOCKED |
+| `repair-worker` | `*` (all safe tools) | Performs a fresh, feedback-directed repair without weakening criteria |
+| `final-orchestrator` | Read-only file + terminal | Validates the integrated result against the original objective |
+
+The five reviewed-workflow names above are logical roles. Their underlying agentType
+files and role models can be remapped through plugin configuration without changing
+workflow code.
 
 Agent types are resolved from three locations in priority order (on a name collision,
 earlier locations override later ones):
 
 1. `<project>/.hermes/dynamic-workflows/agents/*.md`  — project level, applies only to the current project
 2. `~/.hermes/dynamic-workflows/agents/*.md`          — user level, applies globally
-3. `<plugin>/hermes_dynamic_workflows/agents/*.md`    — built-in defaults (general-purpose/explore/plan/verification)
+3. `<plugin>/hermes_dynamic_workflows/agents/*.md`    — built-in defaults
 
 To add a custom type, create a new `.md` file under directory 1 or 2 in the following format:
 
