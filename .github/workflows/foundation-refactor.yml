@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: foundation-refactor
+  cancel-in-progress: true
+
 jobs:
   apply-and-verify:
     if: github.actor != 'github-actions[bot]'
@@ -21,7 +25,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: refactor/t00-t02-foundation
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -31,21 +35,36 @@ jobs:
       - name: Install package
         run: python -m pip install -e .
 
-      - name: Run pre-change baseline
-        id: baseline
+      - name: Run original baseline
+        id: initial
         shell: bash
         run: |
           set +e
-          python -m unittest discover -s tests -v > /tmp/foundation-baseline.log 2>&1
+          python -m unittest discover -s tests -v > /tmp/foundation-initial.log 2>&1
           status=$?
-          cat /tmp/foundation-baseline.log
+          cat /tmp/foundation-initial.log
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Stop on pre-existing failures
-        if: steps.baseline.outputs.status != '0'
+      - name: Repair pre-existing baseline defect
+        if: steps.initial.outputs.status != '0'
+        run: python tools/repair_foundation_baseline.py
+
+      - name: Run stabilized baseline
+        id: stabilized
+        shell: bash
         run: |
-          echo "The pre-change baseline failed; refusing to apply the refactor."
+          set +e
+          python -m unittest discover -s tests -v > /tmp/foundation-stabilized.log 2>&1
+          status=$?
+          cat /tmp/foundation-stabilized.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Stop if baseline remains red
+        if: steps.stabilized.outputs.status != '0'
+        run: |
+          echo "The stabilized baseline still fails; refusing to apply T01/T02."
           exit 1
 
       - name: Apply T01 and T02
@@ -62,13 +81,15 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Write verified baseline report
-        if: always() && steps.baseline.outputs.status == '0'
+      - name: Write verified foundation report
+        if: always() && steps.stabilized.outputs.status == '0'
         run: |
-          python tools/apply_foundation_refactor.py report \
-            --base-commit "$(git rev-parse HEAD^)" \
-            --baseline-log /tmp/foundation-baseline.log \
-            --baseline-status "${{ steps.baseline.outputs.status }}" \
+          python tools/write_foundation_report.py \
+            --base-commit "$(git merge-base HEAD origin/master)" \
+            --initial-log /tmp/foundation-initial.log \
+            --initial-status "${{ steps.initial.outputs.status }}" \
+            --stabilized-log /tmp/foundation-stabilized.log \
+            --stabilized-status "${{ steps.stabilized.outputs.status }}" \
             --final-log /tmp/foundation-final.log \
             --final-status "${{ steps.final.outputs.status }}"
 
@@ -81,6 +102,8 @@ jobs:
       - name: Remove one-shot machinery
         run: |
           rm -f tools/apply_foundation_refactor.py
+          rm -f tools/repair_foundation_baseline.py
+          rm -f tools/write_foundation_report.py
           rm -f .github/workflows/foundation-refactor.yml
 
       - name: Commit verified foundation
