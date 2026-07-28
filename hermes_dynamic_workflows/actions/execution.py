@@ -14,7 +14,6 @@ from ..contracts.packages import (
 )
 from ..core.errors import ReviewedStateError
 from ..core.schema import validate_schema
-from ..engine.api import WorkflowAPI
 from ..engine.integration import integrate_reviewed_workspace, reviewed_workspace_context
 
 
@@ -39,12 +38,12 @@ class ReviewedTaskExecutionAction:
 
         task = deepcopy(task_state["task"])
         lease = _create_task_workspace(api, task)
-        workspace_api = _workspace_api(api, lease.cwd)
-        max_repairs = int(plan["max_repairs_per_task"])
-        repair_attempt = 0
-        integration_result: dict[str, Any] | None = None
-
         try:
+            workspace_api = _workspace_api(api, lease.cwd)
+            max_repairs = int(plan["max_repairs_per_task"])
+            repair_attempt = 0
+            integration_result: dict[str, Any] | None = None
+
             api.context.state.reviewed.start_task(task_id)
             _journal(
                 api,
@@ -161,9 +160,9 @@ class ReviewedTaskExecutionAction:
                     task,
                     attempt=int(result["attempt"]),
                     status=status,
-                    sourceCommit=integration_result.get("source_commit"),
+                    summary=integration_result["summary"],
                     integratedCommit=integration_result.get("integrated_commit"),
-                    error=integration_result.get("error") or "",
+                    evidence=deepcopy(integration_result["evidence"]),
                 )
             else:
                 status = verdict["verdict"]
@@ -311,6 +310,8 @@ def _workspace_api(api: Any, cwd: str) -> Any:
         return factory(cwd)
     if not hasattr(api, "frame") or not hasattr(api, "context"):
         raise ReviewedStateError("workflow API cannot create a scoped task workspace view")
+    from ..engine.api import WorkflowAPI
+
     frame = copy(api.frame)
     frame.cwd = cwd
     return WorkflowAPI(
