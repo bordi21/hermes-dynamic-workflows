@@ -138,7 +138,7 @@ WORKER_RESULT_PACKAGE_SCHEMA = {
         "status": {"type": "string", "enum": ["COMPLETED", "FAILED", "BLOCKED"]},
         "summary": _string(),
         "changed_paths": _strings(),
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
         "tests": {"type": "array", "items": TEST_RESULT_SCHEMA},
         "blocker": {"type": ["string", "null"]},
     },
@@ -167,7 +167,7 @@ CRITERION_RESULT_SCHEMA = {
     "properties": {
         "criterion": _string(),
         "passed": {"type": "boolean"},
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
         "feedback": {"type": "string"},
     },
 }
@@ -197,7 +197,7 @@ REVIEW_VERDICT_PACKAGE_SCHEMA = {
         "summary": _string(),
         "criteria_results": {"type": "array", "minItems": 1, "items": CRITERION_RESULT_SCHEMA},
         "feedback": {"type": "array", "items": _string()},
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
     },
 }
 
@@ -239,7 +239,7 @@ INTEGRATION_RESULT_PACKAGE_SCHEMA = {
         "status": {"type": "string", "enum": ["INTEGRATED", "CONFLICT", "SKIPPED", "FAILED"]},
         "summary": _string(),
         "integrated_commit": {"type": ["string", "null"]},
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
     },
 }
 
@@ -250,7 +250,7 @@ REQUIREMENT_RESULT_SCHEMA = {
     "properties": {
         "requirement": _string(),
         "satisfied": {"type": "boolean"},
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
         "gap": {"type": "string"},
     },
 }
@@ -278,7 +278,7 @@ FINAL_VALIDATION_PACKAGE_SCHEMA = {
         "summary": _string(),
         "requirement_results": {"type": "array", "minItems": 1, "items": REQUIREMENT_RESULT_SCHEMA},
         "delta_tasks": {"type": "array", "items": _embedded(TASK_PACKAGE_SCHEMA)},
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
     },
 }
 
@@ -320,7 +320,7 @@ FINAL_REPORT_PACKAGE_SCHEMA = {
         },
         "final_validation": _embedded(FINAL_VALIDATION_PACKAGE_SCHEMA),
         "unresolved": _strings(),
-        "evidence": {"type": "array", "items": EVIDENCE_ITEM_SCHEMA},
+        "evidence": {"type": "array", "minItems": 1, "items": EVIDENCE_ITEM_SCHEMA},
     },
 }
 

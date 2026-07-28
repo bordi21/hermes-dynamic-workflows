@@ -6,7 +6,7 @@
 - Test command: `python -m unittest discover -s tests -v`
 - Initial baseline: `FAIL` — 243 tests, one pre-existing failure
 - Stabilized baseline: `PASS` — 243 tests
-- Post-change suite: `PASS` — 247 tests
+- Post-change suite: `PASS` — 248 tests
 - Verification workflow run: `30391596987`
 
 ## T00 — Executable baseline
@@ -25,7 +25,7 @@ Repository tests inspect the actual constructor arguments supplied to `AIAgent`.
 
 Nine canonical Draft 2020-12 schemas define `PlanPackage`, `TaskPackage`, `WorkerResultPackage`, `ReviewRequestPackage`, `ReviewVerdictPackage`, `RepairPackage`, `IntegrationResultPackage`, `FinalValidationPackage`, and `FinalReportPackage`.
 
-The schemas use the plugin's existing structured-output validation path. Tests require planner-authored reviewer guidelines, strict `PASS`/`FAIL`/`BLOCKED` verdicts, and repair lineage containing the original task, previous result, and reviewer feedback.
+The schemas use the plugin's existing structured-output validation path. Tests require planner-authored reviewer guidelines, strict `PASS`/`FAIL`/`BLOCKED` verdicts, and repair lineage containing the original task, previous result, and reviewer feedback. Evidence-backed results and verdicts require at least one concrete evidence item; empty evidence arrays are rejected.
 
 ## Verification boundary
 

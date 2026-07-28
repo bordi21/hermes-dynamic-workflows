@@ -94,6 +94,17 @@ class WorkflowContractSchemaTests(unittest.TestCase):
         with self.assertRaises(StructuredOutputError):
             validate_schema(verdict, REVIEW_VERDICT_PACKAGE_SCHEMA)
 
+    def test_evidence_backed_verdict_rejects_empty_evidence(self):
+        verdict = valid_review_verdict()
+        verdict["evidence"] = []
+        with self.assertRaises(StructuredOutputError):
+            validate_schema(verdict, REVIEW_VERDICT_PACKAGE_SCHEMA)
+
+        verdict = valid_review_verdict()
+        verdict["criteria_results"][0]["evidence"] = []
+        with self.assertRaises(StructuredOutputError):
+            validate_schema(verdict, REVIEW_VERDICT_PACKAGE_SCHEMA)
+
     def test_repair_packet_carries_original_task_previous_result_and_feedback(self):
         repair = {
             "schema_version": "1.0",
