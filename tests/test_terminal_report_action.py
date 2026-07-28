@@ -222,7 +222,9 @@ class TerminalReportActionTests(unittest.TestCase):
             ["PASS", "FAIL"],
         )
         self.assertTrue(any("Task B failed" in item for item in report["unresolved"]))
-        self.assertTrue(any("replanning limit exhausted" in item for item in report["unresolved"]))
+        self.assertTrue(
+            any("replanning limit exhausted" in item.lower() for item in report["unresolved"])
+        )
 
     def test_exhausted_not_approved_without_integrated_work_is_failed(self):
         api = _API()
