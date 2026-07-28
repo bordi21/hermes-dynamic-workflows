@@ -140,7 +140,7 @@ class InitialPlanningActionTests(unittest.IsolatedAsyncioTestCase):
         plan = _plan(_task("A", depends_on=["B"]), _task("B"))
         api = _FakeAPI(plan)
 
-        with self.assertRaisesRegex(ReviewedStateError, "dependency must appear earlier: B"):
+        with self.assertRaisesRegex(ReviewedStateError, "integrated or appear earlier: B"):
             await InitialPlanningAction().run(api, original_objective=OBJECTIVE)
 
         self.assertEqual(api.context.state.reviewed.snapshot()["tasks"], [])
