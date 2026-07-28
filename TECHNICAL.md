@@ -48,6 +48,7 @@ required; `whenToUse` and `phases` optional).
 | `phase` | `phase(title)` | Starts a progress group. |
 | `log` | `log(message)` | Sends a line of progress to the user. |
 | `workflow` | `await workflow(name_or_ref, args=None)` | Runs another workflow inline, sharing concurrency/counts/stop/budget; one level of nesting only. |
+| `reviewed_workflow` | `await reviewed_workflow(request)` | Narrow lifecycle primitive used by the packaged `reviewed-workflow`; accepts one non-empty objective string or one exact objective object. |
 | `args` | — | The tool input `args` verbatim; `None` if not passed. |
 | `budget` | `budget.total` / `spent()` / `remaining()` | Taken from a `+500k`-style target in the user's message. `total` is a hard cap — once reached, `agent()` throws; when unset, `remaining()` is `math.inf`. |
 
@@ -55,6 +56,51 @@ Also available: `json`, `math`, safe builtins, and common exception types. **For
 (rejected by the sandbox): imports, file/process/network access, dunder traversal,
 `eval/exec`, class definitions, dynamic call targets, and time/randomness APIs (they
 break resume).
+
+## Canonical Reviewed Workflow
+
+The package ships one named workflow at
+`hermes_dynamic_workflows/workflows/reviewed-workflow.py`. Resolving
+`{"name": "reviewed-workflow"}` through the normal `workflow` tool persists and
+launches that script through the same `WorkflowRunManager`, approval gate, background
+runtime, store, journal, transcript exporter, controls, limits, notification path, and
+resume cache as any other workflow. The script itself contains only literal metadata and
+`return await reviewed_workflow(args)`; it does not duplicate orchestration policy.
+
+`reviewed_workflow(request)` is injected after the standard `WorkflowAPI` globals and
+delegates to `ReviewedWorkflowAction`. Accepted requests are a non-empty string, exactly
+`{"objective": "..."}`, or exactly `{"original_objective": "..."}`. Numbers,
+empty strings, ambiguous shapes, and additional fields fail before planning.
+
+The composite Action sequences existing domain Actions:
+
+1. `InitialPlanningAction` launches one `initial-orchestrator`, validates the complete
+   `PlanPackage`, and registers ordered task lineage plus action-owned repair/replanning
+   limits.
+2. `ReviewedTaskExecutionAction` owns one isolated task worktree across a fresh worker, a
+   separate read-only reviewer, bounded fresh repair sessions, and transactional
+   integration. The reviewer receives concrete workspace/diff evidence; only an
+   evidence-backed `PASS` invokes integration.
+3. Dependency readiness is recalculated after each accepted integration. A `PLANNED`
+   task whose required dependency ended `FAILED`, `BLOCKED`, or `SKIPPED` becomes a
+   terminal zero-attempt `SKIPPED` task with the exact dependency reason. A remaining
+   nonterminal task—including `PASS` after an integration conflict—stops the cycle
+   fail-closed.
+4. `FinalValidationAction` launches one read-only `final-orchestrator` only after the
+   latest cycle is terminal. `APPROVED` and `BLOCKED` cannot create work;
+   `NOT_APPROVED` may register one focused delta `PlanPackage` only while the original
+   configured cycle limit remains. Delta tasks may depend only on already `INTEGRATED`
+   tasks or earlier tasks in the same delta plan.
+5. Every delta cycle re-enters the same execution and validation path. Once the workflow
+   is terminal, `TerminalReportAction` deterministically derives one schema-valid
+   `FinalReportPackage` from persisted state rather than asking a model to synthesize or
+   verify success. Every task, requirement gap, blocker, skip reason, exhausted limit,
+   and evidence reference remains visible.
+
+The reviewed state is embedded in the existing workflow snapshot/store; there is no
+second runner, FSM database, workflow engine, or telemetry channel. Role model routing
+remains provider-neutral and configurable for `initial-orchestrator`, `worker`,
+`reviewer`, `repair-worker`, and `final-orchestrator`.
 
 ## Tools
 
@@ -368,11 +414,17 @@ ought to have. Tool inputs / `meta` / config / environment cannot set `total`.
   `.hermes/dynamic-workflows/agents/<name>.{md,yaml,json}` → user
   `~/.hermes/dynamic-workflows/agents/<name>.…` → the plugin's built-in
   `agents/<name>.md`. Markdown supports YAML frontmatter (`model` / `toolsets` /
-  `isolation`, …). Built-in: `explore`, `general-purpose`, `plan`, `verification`.
+  `isolation`, …). Built-in: `explore`, `general-purpose`, `plan`, `verification`, `initial-orchestrator`, `worker`, `reviewer`, `repair-worker`, and `final-orchestrator`.
 - **worktree**: `agent(isolation="worktree")` runs each subagent in its own git worktree,
   preventing conflicts from concurrent edits to the same checkout. This is workspace
   isolation, not a security sandbox; the worktree is deleted after use by default
-  (`keep_worktrees` off).
+  (`keep_worktrees` off). The reviewed lifecycle instead creates one task-owned worktree
+  and retains it across worker, reviewer, and bounded repair sessions before applying
+  the existing PASS-only integration and cleanup policy.
+- **named workflows**: resolution order remains project `.hermes/workflows/` → user
+  `~/.hermes/workflows/` → packaged built-ins. This fork packages
+  `reviewed-workflow`; project or user workflows with the same name override it through
+  the existing precedence rules.
 
 ## Control (Pause / Resume / Stop / Restart)
 
@@ -395,13 +447,17 @@ No separate config file: the plugin reads the
 `config.yaml`, and supports `HERMES_DYNAMIC_WORKFLOWS_*` environment variable overrides.
 For the keys, defaults, and meanings, see the Configuration section of the README.
 
-## Foundation implementation status (T00-T02)
+## Reviewed workflow implementation status (T00-T12)
 
-The first reviewed-workflow foundation slice is implemented as follows:
+The repository now implements the complete named reviewed lifecycle:
 
-- workflow child `AIAgent` sessions load the launching Hermes profile context files and memory;
-- task-specific context remains isolated in the child session's scoped first user message;
-- the memory toolset is no longer globally blocked for workflow children, while recursive workflow/delegation surfaces remain blocked;
-- nine canonical Draft 2020-12 handoff schemas define planner, worker, reviewer, repair, integration, final-validation, and final-report transport.
+- workflow child `AIAgent` sessions load the launching Hermes profile context files and memory while task-specific context remains isolated in the scoped first user message;
+- nine canonical Draft 2020-12 schemas define planner, worker, reviewer, repair, integration, final-validation, and final-report transport;
+- role presets and model routing are configurable and provider-neutral;
+- reviewed plan/task lineage, attempts, verdicts, repairs, integrations, final validations, skip reasons, and the terminal report persist inside the existing workflow state;
+- one task-owned worktree is retained across worker, reviewer, and bounded repair sessions; only evidence-backed PASS reaches transactional integration;
+- final validation is read-only and may produce only bounded delta replanning;
+- the terminal report is deterministic and cannot silently discard failed, blocked, skipped, conflicting, or exhausted state;
+- packaged named workflow `reviewed-workflow` connects all stages through the existing runtime and control plane.
 
-This slice does not yet implement the orchestration FSM, repair loop, PASS-only integration, or final replanning. Those remain subsequent tasks. Live Hermes canary verification is separate from the repository unit-test baseline.
+Repository verification for the merged T12 revision passed 28 focused lifecycle tests and all 314 tests in the suite. This proves the repository behavior exercised by those tests, not installation-specific Hermes behavior. Provider routing, approvals, pause/stop/restart, cache resume, notifications, persistence, worktree integration, and true crash recovery still require narrow live canaries in the target Hermes/VPS environment before they may be described as verified end to end.
