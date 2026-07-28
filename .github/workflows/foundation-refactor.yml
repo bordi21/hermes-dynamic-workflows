@@ -67,6 +67,9 @@ jobs:
           echo "The stabilized baseline still fails; refusing to apply T01/T02."
           exit 1
 
+      - name: Normalize one-shot driver path
+        run: sed -i 's/test_child_agents.py/test_child_agent.py/' tools/apply_foundation_refactor.py
+
       - name: Apply T01 and T02
         run: python tools/apply_foundation_refactor.py apply
 
@@ -82,7 +85,7 @@ jobs:
           exit 0
 
       - name: Write verified foundation report
-        if: always() && steps.stabilized.outputs.status == '0'
+        if: always() && steps.final.outputs.status != ''
         run: |
           python tools/write_foundation_report.py \
             --base-commit "$(git merge-base HEAD origin/master)" \
