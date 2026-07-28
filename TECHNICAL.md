@@ -1,396 +1,837 @@
-# Hermes Dynamic Workflows — Technical Documentation
+# Hermes Dynamic Workflow — Agent System and Runtime Contract
 
-The model writes a sandboxed Python script on the fly, the background runtime executes
-it, and it orchestrates large numbers of independent Hermes subagents with
-`agent()/parallel()/pipeline()`. This document explains the implementation point by
-point; all result strings are taken verbatim from the source.
+This document is the canonical L2 source for agents, tools, orchestration, review,
+execution state, persistence, approvals, recovery, and extension boundaries.
 
-## Core Execution Path
+Use `README.md` for project identity and user-facing operation. Use this file when a
+change affects how work is decomposed, executed, reviewed, controlled, observed, or
+recovered.
 
-The main agent calls the `workflow` tool → `WorkflowRunManager.start_from_params`:
+## 1. System model
 
-1. Resolve the source (one of `script` / `scriptPath` / `name`).
-2. `parse_script` + `extract_meta`: AST validation, extracting the first-statement literal `meta`.
-3. Top-level launch approval (`require_launch_approval`, on by default).
-4. Persist the script, create the run record, start a background daemon thread, and **the tool returns synchronously** with the Task ID / Run ID / script path.
+Hermes remains the host agent and the single control plane.
 
-Background thread `run_workflow`: wraps the script body after `meta` into a private
-async entry point, injects the sandboxed globals, and runs it with `exec`. An
-`await agent(...)` in the script → `WorkflowAPI` → a concurrency slot →
-`HermesChildAgentRunner` spawns an independent `AIAgent` subagent and returns its text
-(or the schema-validated object).
-
-On every state change: a snapshot is written to the run record + `journal.jsonl`, and
-subagent transcripts are exported in real time. On terminal state: write the output
-file, do a final transcript flush, and inject a `<task-notification>` into the main
-conversation (CLI only).
-
-On-disk locations (`<cwd>` is the sanitized working directory):
-
+```text
+User
+  ↓
+Launching Hermes profile
+  ↓ workflow tool
+WorkflowRunManager
+  ↓
+sandboxed workflow script
+  ↓
+WorkflowAPI
+  ├── agent()
+  ├── pipeline()
+  ├── parallel()
+  └── workflow()
+        ↓
+HermesChildAgentRunner
+        ↓
+independent Hermes AIAgent children
+        ↓
+tools / workspace / structured result
 ```
-~/.hermes/projects/<cwd>/<sessionId>/workflows/scripts/<name>-<runId>.py   # persisted script
-~/.hermes/projects/<cwd>/<sessionId>/subagents/workflows/<runId>/          # transcript directory
-    journal.jsonl                                                         # run event stream
-    agent-<sessionId>.jsonl  +  .meta.json                                # one per subagent
+
+A workflow run is not a second Hermes profile. It is a background execution owned by
+the launching Hermes process, with persisted state and multiple fresh child sessions.
+
+## 2. Current actors
+
+| Actor | Current responsibility |
+|---|---|
+| Launching Hermes agent | Understands the user request, writes or selects a workflow, requests launch, and receives completion |
+| Workflow script | Expresses deterministic orchestration and control flow |
+| `WorkflowRunManager` | Owns launch approval, run lifecycle, persistence, background thread, completion, and controls |
+| `WorkflowAPI` | Implements workflow semantics such as `agent`, `pipeline`, `parallel`, phases, logs, nesting, and budget |
+| `HermesChildAgentRunner` | Constructs and runs independent Hermes `AIAgent` children |
+| Child `AIAgent` | Executes one scoped prompt with the allowed tools and selected model |
+| `agentType` | Supplies reusable role instructions, tool policy, model default, and isolation default |
+| Reviewer child | Currently just a child selected by workflow logic; no universal reviewed-flow contract exists yet |
+| TUI and `/workflows` | Read persisted state and transcripts; expose progress and run-level controls |
+
+## 3. Target project roles
+
+The fork will add a canonical reviewed workflow without requiring separately managed
+profiles.
+
+| Role | Required behavior |
+|---|---|
+| Parent / Orchestrator | Resolve the objective, decompose it into bounded tasks, define dependencies and acceptance criteria |
+| Worker | Execute exactly one task packet, produce a result and evidence, and avoid expanding scope |
+| Reviewer | Evaluate one worker result against the task packet and return `PASS`, `FAIL`, or `BLOCKED` |
+| Repair worker | Run in a fresh child session with the original packet, prior attempt, and reviewer feedback |
+| Integrator | Combine only accepted results and resolve controlled merge or composition concerns |
+| Final reviewer | Verify the integrated result against the original objective and evidence |
+
+These are logical roles. They may be implemented through `agentType`, workflow metadata,
+schemas, and model routing. They are not durable Hermes profiles.
+
+## 4. Context inheritance contract
+
+A child is a real Hermes `AIAgent`, but it is intentionally not a clone of the parent
+conversation.
+
+The child runtime can inherit:
+
+- provider and API endpoint;
+- credentials and credential pool;
+- current model and fallback model;
+- token limits;
+- reasoning configuration and service tier;
+- selected toolsets;
+- Hermes command approval behavior;
+- the current workspace or an isolated worktree.
+
+The child does not automatically inherit:
+
+- the parent conversation history;
+- Hermes memory;
+- project context files;
+- SOUL or identity documents;
+- unstated assumptions accumulated by the parent.
+
+The runner currently creates children with `skip_context_files=True` and
+`skip_memory=True`. The workflow must therefore pass the necessary context explicitly.
+
+### Task packet
+
+Each worker-facing packet should contain only what the task needs:
+
+```text
+task ID
+objective
+workspace and relevant paths
+inputs and dependencies
+constraints
+allowed mutations
+acceptance criteria
+required evidence
+expected output schema
 ```
 
-## Python Script API
+Reviewer packets additionally include the worker result and evidence. Repair packets
+also include the previous attempt and reviewer feedback.
 
-The script body is itself async: write top-level `await` / `return` directly. **The
-first statement must be a pure literal `meta = {...}`** (`name` and `description`
-required; `whenToUse` and `phases` optional).
+Do not solve missing context by copying the full parent transcript into every child.
 
-| Global | Signature | Description |
-|---|---|---|
-| `agent` | `await agent(prompt, opts=None)` | Spawns a subagent. Without a schema it returns text; with `schema` it returns the validated object. `opts`: `label` `phase` `schema` `model` `isolation` `agentType`. Returns `None` if skipped by the user. |
-| `pipeline` | `await pipeline(items, stage1, …)` | Each item flows through the stages independently, **no barrier**. Stage callbacks receive `(prev, original, index)`; if a stage throws → that item becomes `None`. The default for multi-stage work. |
-| `parallel` | `await parallel(thunks)` | Runs concurrently, **with a barrier**: returns only once all complete. A single failure → `None` in the results (the whole call does not throw). |
-| `phase` | `phase(title)` | Starts a progress group. |
-| `log` | `log(message)` | Sends a line of progress to the user. |
-| `workflow` | `await workflow(name_or_ref, args=None)` | Runs another workflow inline, sharing concurrency/counts/stop/budget; one level of nesting only. |
-| `args` | — | The tool input `args` verbatim; `None` if not passed. |
-| `budget` | `budget.total` / `spent()` / `remaining()` | Taken from a `+500k`-style target in the user's message. `total` is a hard cap — once reached, `agent()` throws; when unset, `remaining()` is `math.inf`. |
+## 5. Model routing
 
-Also available: `json`, `math`, safe builtins, and common exception types. **Forbidden**
-(rejected by the sandbox): imports, file/process/network access, dunder traversal,
-`eval/exec`, class definitions, dynamic call targets, and time/randomness APIs (they
-break resume).
+Current runtime model selection can come from:
 
-## Tools
+1. explicit `agent(..., {"model": "..."})`;
+2. `agentType` frontmatter;
+3. phase metadata;
+4. inherited parent model.
 
-The plugin registers two main-agent tools with Hermes (`workflow`, `task_stop`) and one
-subagent-only tool (`structured_output`, registered temporarily only while a
-schema-bearing subagent is alive).
+The project target is role-based configuration for parent, worker, reviewer, repair,
+integrator, and final reviewer. The configuration must:
 
-### workflow
+- remain provider-neutral;
+- use the existing config-loading path;
+- preserve explicit per-call overrides where allowed;
+- avoid hardcoded model names in workflow logic;
+- expose the selected model in canonical telemetry.
 
-Executes an orchestration script in the background; returns synchronously and injects a
-`<task-notification>` on completion.
+Do not create a second configuration file when the current Hermes plugin configuration
+can be extended.
 
-Tool schema (the description is very long and elided here with `…`; the parameters are
-shown in full below):
+## 6. Agent types
+
+Agent types are lightweight reusable child definitions resolved by
+`hermes_dynamic_workflows/child/presets.py`.
+
+Supported formats:
+
+```text
+.md
+.yaml
+.yml
+.json
+```
+
+Resolution precedence:
+
+1. `<project>/.hermes/dynamic-workflows/agents/`
+2. `~/.hermes/dynamic-workflows/agents/`
+3. `hermes_dynamic_workflows/agents/`
+
+An `AgentTypeSpec` may define:
+
+- name;
+- description;
+- instructions;
+- model;
+- toolsets;
+- allowed tools;
+- disallowed tools;
+- isolation.
+
+Built-in types currently include:
+
+- `general-purpose`;
+- `explore`;
+- `plan`;
+- `verification`.
+
+Agent types should define stable role behavior. Per-task facts belong in the first user
+message, not the system prompt. Keeping same-role system prompts stable also preserves
+cross-child prompt-cache reuse.
+
+## 7. Core execution path
+
+The main agent calls the `workflow` tool.
+
+### Launch
+
+`WorkflowRunManager.start_from_params`:
+
+1. resolves `script`, `scriptPath`, or named workflow;
+2. parses and validates the script;
+3. extracts the literal first-statement `meta`;
+4. requests top-level launch approval;
+5. creates Run ID and Task ID;
+6. persists script and initial run record;
+7. captures parent runtime and session context;
+8. starts a background daemon thread;
+9. returns synchronously with run metadata.
+
+The tool returning successfully means the run was launched. It does not mean the work
+completed.
+
+### Runtime
+
+The background thread:
+
+1. builds `HermesChildAgentRunner`;
+2. transitions the run to `running`;
+3. invokes `run_workflow`;
+4. executes the validated script with restricted globals;
+5. writes snapshots and journal events on state changes;
+6. exports active child transcripts;
+7. records `completed`, `failed`, `stopped`, or another terminal state;
+8. writes final output and transcripts;
+9. sends the completion notification.
+
+### Child call
+
+`await agent(...)` flows through:
+
+```text
+WorkflowAPI.agent
+  → reserve agent record
+  → resolve model / agentType / tools / isolation
+  → concurrency slot
+  → HermesChildAgentRunner.run
+  → fresh AIAgent session
+  → child tools and workspace
+  → text or schema-validated object
+  → journal + snapshot + cache
+```
+
+## 8. Workflow script contract
+
+A workflow script is async Python. The first statement must be a pure literal:
+
+```python
+meta = {
+    "name": "workflow-name",
+    "description": "What this workflow does",
+    "phases": [
+        {"title": "Build"},
+        {"title": "Review"},
+    ],
+}
+```
+
+Required:
+
+- `meta.name`;
+- `meta.description`.
+
+Optional:
+
+- `meta.whenToUse`;
+- `meta.phases`.
+
+The script body can use top-level `await` and `return`. It must not define its own
+`workflow()` function.
+
+### Exposed globals
+
+| Global | Contract |
+|---|---|
+| `agent(prompt, opts=None)` | Spawn one child; return text, a validated object, or `None` when skipped |
+| `pipeline(items, stage1, ...)` | Run each item independently through all stages; no global stage barrier |
+| `parallel(thunks)` | Run calls concurrently and wait for all submitted calls |
+| `phase(title)` | Select or create a visible phase |
+| `log(message)` | Append bounded progress text |
+| `workflow(name_or_ref, args=None)` | Run one nested workflow inline |
+| `args` | Launch arguments passed verbatim |
+| `budget` | Read total, spent, and remaining run tokens |
+
+Common `agent` options:
+
+```text
+label
+phase
+model
+agentType
+schema
+isolation
+```
+
+Nested workflows share the parent run's concurrency, stop signal, budget, and agent
+count. Nesting is limited to one level.
+
+## 9. Pipeline and parallel semantics
+
+Use `pipeline` when every item should advance independently through several stages.
+
+```text
+item A: worker → reviewer → repair
+item B: worker ─────────→ reviewer
+item C: worker → blocked
+```
+
+A later stage for item A may begin while item B is still in an earlier stage.
+
+Use `parallel` when the caller needs a batch barrier before continuing.
+
+A child failure inside `pipeline` or `parallel` currently becomes `None` for that item
+and is logged. Reviewed workflows must not confuse `None` with success. They should
+classify it explicitly as failure or blocked state.
+
+## 10. Structured output and review contract
+
+When `schema` is supplied, the runner temporarily registers the child-only
+`structured_output` tool. The child must call it before finishing.
+
+The runtime:
+
+- validates against JSON Schema;
+- keeps the same child session for correction attempts;
+- allows at most five structured-output attempts;
+- returns the validated object to the workflow;
+- records validation metadata in agent state.
+
+The canonical reviewer schema should be narrow and fail closed, for example:
 
 ```json
 {
-  "description": "Execute a workflow script that orchestrates multiple subagents …",
-  "parameters": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "script":          { "type": "string", "maxLength": 524288, "description": "Self-contained workflow script. Must begin with literal `meta = {…}` …" },
-      "scriptPath":      { "type": "string", "description": "Path to a workflow script on disk. Takes precedence over `script` and `name`." },
-      "name":            { "type": "string", "description": "Name of a predefined workflow (built-in or from .hermes/workflows/)." },
-      "args":            { "description": "Value exposed to the script as global `args`, verbatim. Pass real JSON, not a JSON-encoded string." },
-      "resumeFromRunId": { "type": "string", "pattern": "^wf_[a-z0-9-]{6,}$", "description": "Run ID to resume from; unchanged agent() calls return cached results." },
-      "description":     { "type": "string", "description": "Ignored — set it in the script's meta block." },
-      "title":           { "type": "string", "description": "Ignored — set it in the script's meta block." }
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "evidence", "feedback"],
+  "properties": {
+    "verdict": {
+      "type": "string",
+      "enum": ["PASS", "FAIL", "BLOCKED"]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "feedback": {
+      "type": "string"
     }
   }
 }
 ```
 
-At launch, the list of currently available agentTypes is also appended to the end of the
-description.
+Semantics:
 
-**Tool call results.** Launch is synchronous — the results below are returned before the
-background thread starts, at which point there is **no** notification yet (the run has
-not begun).
+- `PASS`: acceptance criteria are satisfied and supported by evidence;
+- `FAIL`: the task is repairable and feedback identifies what must change;
+- `BLOCKED`: required information, permission, dependency, or environment is unavailable.
 
-On successful launch:
+Never:
 
-```
-Workflow launched in background. Workflow Task ID: <taskId>
-Summary: <meta.description or meta.name>
-Transcript dir: <…/subagents/workflows/<runId>>
-Script file: <…/scripts/<name>-<runId>.py>
-Run ID: <runId>
-To resume after editing the script: Workflow({scriptPath: "<path>", resumeFromRunId: "<runId>"})
-You will be notified when it completes. Use /workflows to watch live progress.
-```
+- default an absent verdict to `PASS`;
+- force a review transition;
+- treat schema validity as correctness;
+- label synthesis as verification;
+- integrate failed or blocked work.
 
-Validation/parse/input errors are uniformly wrapped as `{"error":"<msg>"}` (where
-`<msg>` is one of the following):
+## 11. Bounded repair
 
-```
-# missing source
-provide one of script, scriptPath, or name
+A failed review may trigger a fresh repair child.
 
-# meta contract (the first statement must be a pure literal meta dict)
-Invalid workflow script: `meta = {...}` must be the FIRST statement in the script
-Invalid workflow script: meta must be a pure literal
-Invalid workflow script: meta must be a pure literal: only plain properties allowed in meta
-Invalid workflow script: meta must be a pure literal: template interpolation not allowed in meta
-Invalid workflow script: meta must be a pure literal: non-literal node type in meta: <NodeType>
-Invalid workflow script: meta.name must be a non-empty string
-Invalid workflow script: meta.description must be a non-empty string
-Invalid workflow script: meta keys must be strings
-Invalid workflow script: forbidden meta key: <key>
-Invalid workflow script: meta.<name|description|whenToUse> must be a string
-Invalid workflow script: meta.phases must be a list
-Invalid workflow script: meta.phases object entries require a title string
-Invalid workflow script: meta.phases.<detail|model> must be a string
-Invalid workflow script: meta.phases entries must be strings or objects
+The repair input must include:
 
-# parsing / size
-Invalid workflow script: Script parse error: <syntax msg> at line <l>, column <c>. Workflow scripts must be plain Python.
-Invalid workflow script: workflow script is too large (<n> chars; max <max>)
-do not define workflow(); the workflow script body is already async
-
-# sandbox (capability overreach)
-forbidden Python syntax: <NodeType>
-forbidden name: <name>
-forbidden attribute access: <attr>
-forbidden method call: <attr>
-dynamic call targets are not allowed
-workflow script is too complex (>2500 AST nodes)
-string literal is too large
-integer literal is too large
-bare 'except:' is not allowed; catch Exception or a specific type
-'except BaseException' is not allowed; catch Exception instead
-Workflow scripts must be deterministic: current time and randomness are unavailable (breaks resume). Stamp results after the workflow returns, or pass timestamps via args.
-
-# resume target still running
-Workflow <runId> is still running (task <taskId>). Stop it first with task_stop({"task_id":"<taskId>"}) before resuming.
+```text
+original task packet
+previous result
+previous evidence
+review verdict
+review feedback
+attempt number
+remaining retry budget
 ```
 
-A failed launch approval also goes through `tool_error` (clean, no trace):
+Rules:
 
-```json
-{"error":"Workflow \"<name>\" was not launched: <reason>. Do not retry; tell the user it needs their approval."}
+- retries are bounded;
+- each attempt must be materially informed by feedback;
+- retry count is visible in canonical telemetry;
+- repeated identical attempts must stop;
+- exhausted retries become an explicit terminal failure or blocked result;
+- a repair result must pass review before integration.
+
+Resume cache fingerprints include the prompt and relevant options. Repair prompts must
+therefore change when the feedback or attempt changes.
+
+## 12. Workspaces, worktrees, and integration
+
+Default isolation is the shared current workspace.
+
+`isolation="worktree"` creates an isolated Git worktree and branch for a child. Use it
+when concurrent agents may modify overlapping repository state.
+
+Worktree isolation prevents checkout conflicts. It is not a security sandbox.
+
+Current behavior:
+
+- a clean worktree can be removed automatically;
+- a worktree with changes is retained;
+- the plugin does not universally guarantee semantic merging of child changes.
+
+The integrator must:
+
+- use only accepted child outputs;
+- inspect actual diffs and dependencies;
+- merge in a deterministic order;
+- surface conflicts;
+- run final validation;
+- avoid overwriting unrelated changes.
+
+For read-only work, shared workspace concurrency is usually sufficient.
+
+## 13. State and persistence
+
+The run record is the canonical persisted state.
+
+Important fields include:
+
+```text
+runId
+taskId
+status
+createdAt / startedAt / finishedAt
+cwd
+workflowSessionId
+controlOwner
+scriptPath
+transcriptDir
+journalFile
+source
+resumeFromRunId
+restartedFromRunId
+args
+tokenBudget
+result
+error
+workflow snapshot
+agentCache
+outputFile
+transcript files
 ```
 
-`<reason>` comes from the approval step; common values: `workflow launch was denied`,
-`workflow launch was denied or timed out`, `launch approval required but no interactive
-channel (…)`, `launch approval required but Hermes' approval engine is unavailable`.
+Current active statuses include:
 
-Only other **unexpected** exceptions (genuine internal errors) return diagnostics that
-include a trace — `trace` is the last 8 lines of `traceback.format_exc` (file paths,
-line numbers, offending code), visible to the model alongside the tool result to aid
-reporting: `{"error":"<Type>: <msg>","trace":"<last 8 lines of traceback>"}`.
-
-**Completion notification.** Once the run reaches a terminal state (CLI only), this is
-injected:
-
+```text
+queued
+running
+paused
+stopping
 ```
+
+Current terminal statuses include:
+
+```text
+completed
+failed
+error
+stopped
+```
+
+Reviewed-task lineage, dependencies, verdicts, retry attempts, and integration state
+must be added to this canonical model or its workflow snapshot—not placed in a second
+database.
+
+## 14. On-disk artifacts
+
+For a sanitized working directory and Hermes session:
+
+```text
+~/.hermes/projects/<cwd>/<sessionId>/workflows/scripts/<name>-<runId>.py
+
+~/.hermes/projects/<cwd>/<sessionId>/subagents/workflows/<runId>/
+  journal.jsonl
+  agent-<sessionId>.jsonl
+  agent-<sessionId>.meta.json
+```
+
+The run store also persists the run record and output artifact.
+
+`journal.jsonl` is the append-only execution event stream. It includes child start,
+activity, approval, result, skip, and error events.
+
+Child messages originate in Hermes `SessionDB`. The transcript exporter reconstructs
+compaction lineage and emits viewable JSONL transcripts in real time.
+
+## 15. Observability
+
+Canonical observability surfaces:
+
+- run snapshot;
+- `journal.jsonl`;
+- exported child transcripts;
+- `/workflows`;
+- `hermes-workflows`;
+- completion notification;
+- final output file;
+- saved Markdown transcript.
+
+Per child, preserve:
+
+- ID and label;
+- logical phase;
+- status;
+- prompt;
+- model;
+- agent type;
+- isolation;
+- token counts;
+- cache counts;
+- tool-call count;
+- duration;
+- recent activity;
+- structured-output status;
+- result;
+- error.
+
+The live transcript exporter refreshes active child transcripts approximately every
+0.5 seconds and performs a final validated rebuild at run termination.
+
+A future web interface must read the same state and use the same control channel as the
+TUI.
+
+## 16. Controls
+
+The standalone TUI sends owner-scoped, expiring requests to the Hermes process that
+owns the run. It does not open a local network port.
+
+Current controls:
+
+| Control | Behavior |
+|---|---|
+| Stop | Set stop signal and interrupt active children |
+| Pause | Prevent new children and later pipeline stages from starting |
+| Resume | Reopen the pause gate |
+| Restart | Stop if needed and launch a brand-new run from saved script and args |
+| Save | Export a Markdown transcript |
+
+Pause is cooperative. Children already running may finish. Paused time is excluded
+from the run deadline.
+
+The backend also supports skipping one active child. The current TUI does not expose a
+dedicated skip key.
+
+## 17. Completion notification
+
+On terminal state, the originating session can receive:
+
+```xml
 <task-notification>
-<task-id><taskId></task-id>
-<output-file><path></output-file>        # when an output file exists
-<status><completed|failed|stopped|…></status>
-<summary>Dynamic workflow "<name>" <completed | was stopped | failed: <error> | <status>: <error>></summary>
-<result><the result; truncated past notify_result_preview_chars with a "full result in <file>" note></result>   # when there is no error
-<recovery>Agent transcripts: <transcriptDir></recovery>      # when there is an error
-<usage><agent_count>N</agent_count><subagent_tokens>T</subagent_tokens><tool_uses>U</tool_uses><duration_ms>D</duration_ms></usage>
+  <task-id>...</task-id>
+  <output-file>...</output-file>
+  <status>completed|failed|stopped|...</status>
+  <summary>...</summary>
+  <result>...</result>
+  <recovery>...</recovery>
+  <usage>
+    <agent_count>...</agent_count>
+    <subagent_tokens>...</subagent_tokens>
+    <tool_uses>...</tool_uses>
+    <duration_ms>...</duration_ms>
+  </usage>
 </task-notification>
 ```
 
-### task_stop
+A completion notification reports the terminal run state. It is not independent proof
+that the output is correct.
 
-Stops a background run by its Task ID (only affects live runs; completed/historical runs
-are treated as not found).
+## 18. Resume, restart, and crash recovery
 
-Tool schema:
+These terms are different:
 
-```json
-{
-  "description": "- Stop a running workflow by its Task ID …",
-  "parameters": {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "additionalProperties": false,
-    "properties": { "task_id": { "type": "string", "description": "The ID of the workflow task to stop" } },
-    "required": ["task_id"]
-  }
-}
+- **Resume from run**: launch a new execution with `resumeFromRunId`; unchanged
+  content-addressed child calls reuse cached results.
+- **Pause/resume**: continue the same live run through its pause gate.
+- **Restart**: create a new Run ID from the saved script and args.
+- **Crash recovery**: reconstruct and continue an interrupted process after Hermes or
+  the container dies.
+
+The runtime persists enough material for inspection and cache-assisted relaunch.
+Automatic crash continuation must not be claimed until verified end to end.
+
+When editing a workflow before `resumeFromRunId`, preserve early stable child calls
+when possible. Changes early in the dependency chain reduce downstream cache reuse.
+
+## 19. Concurrency and hard limits
+
+Each run owns a semaphore.
+
+Current guards:
+
+- configured concurrency, capped by `max_concurrency`;
+- `max_agents`;
+- workflow wall-clock timeout, excluding paused time;
+- per-child timeout;
+- maximum loop iterations;
+- optional per-run token budget;
+- stop signal.
+
+Run-level hard stops cannot be swallowed by workflow `except Exception`.
+
+The token budget counts completed child input, output, and reasoning tokens. Once
+exhausted, new `agent()` calls fail closed.
+
+## 20. Sandbox and determinism
+
+Workflow scripts are AST-validated and executed with restricted globals.
+
+Control flow allowed:
+
+```text
+if
+for
+while
+try / except Exception
+top-level await
+return
 ```
 
-Tool call results:
+Capabilities rejected include:
 
-```jsonc
-// success (compact JSON)
-{"message":"Successfully stopped task: <taskId> (<summary>)","task_id":"<taskId>","task_type":"local_workflow"}
-
-// missing parameter
-{"error":"Missing required parameter: task_id"}
-
-// not found / not in a live state (not queued|running|paused)
-{"error":"No task found with ID: <taskId>"}
+```text
+imports
+direct file/process/network access
+dunder traversal
+eval / exec / compile / open / getattr
+class definitions
+dynamic call targets
+time and randomness APIs
+bare except
+except BaseException
 ```
 
-### structured_output (subagent-only)
+Time and randomness are excluded because they break deterministic resume fingerprints.
 
-Registered temporarily only while a schema-bearing subagent is alive; this tool's
-parameters are replaced with the schema requested in `agent(…, {"schema"})`, and the
-subagent must call it to submit its final result. `agent()` returns the validated object
-— no need to parse the subagent's text. At most `MAX_STRUCTURED_OUTPUT_RETRIES = 5`
-attempts.
+This is a guardrail, not a strong security boundary. True isolation would require a
+separate process and RPC boundary.
 
-If a subagent tries to finish without submitting, a continue instruction is appended and
-it is kept in the same session:
+## 21. Permission governance
 
+The plugin reuses Hermes approval infrastructure.
+
+### Launch approval
+
+Top-level workflow launch approval is enabled by default.
+
+- CLI can confirm synchronously.
+- Gateway can present approve/deny interaction.
+- An unattended launch without a valid interactive path is denied.
+- Nested workflows inherit the already approved parent run.
+
+### Child command approval
+
+Child terminal operations still pass through Hermes command guards.
+
+`child_approval_policy` controls what happens when a background child reaches a command
+that would normally require human interaction:
+
+```text
+inherit
+smart
+deny
+approve
+ask
 ```
-You MUST call the structured_output tool to complete this request. Call this tool now.
+
+`ask_fallback` controls unattended fallback for `ask`.
+
+The permanent allowlist and hardline restrictions remain authoritative.
+
+### Hook
+
+The `pre_tool_call` hook restores reliable approval behavior for detached background
+threads. Do not bypass or duplicate it.
+
+## 22. Actions and Services
+
+Actions and Services are responsibility layers, not necessarily literal directory names.
+
+### Actions own
+
+- the meaning of the flow;
+- decomposition and dependency policy;
+- status transitions;
+- retry and repair decisions;
+- failure classification;
+- approval requirements;
+- user-facing outcomes;
+- what gets integrated.
+
+Likely action boundaries include Hermes adapters, run lifecycle decisions, and workflow
+orchestration semantics.
+
+### Services own
+
+- child execution;
+- persistent storage;
+- transcript export;
+- schema validation;
+- caching;
+- worktree creation and cleanup;
+- control request transport;
+- other reusable operational mechanics.
+
+Services must:
+
+- accept explicit inputs;
+- return structured outputs;
+- surface errors explicitly;
+- avoid deciding domain state;
+- remain composable.
+
+### Existing-function-first rule
+
+Before writing a function:
+
+1. search by responsibility, not only by desired function name;
+2. identify the canonical owner;
+3. edit or extend that function;
+4. update its existing callers and tests;
+5. extract a shared service only when mechanics repeat;
+6. migrate one caller and verify before expanding.
+
+Do not add:
+
+- a second run manager;
+- a second child runner;
+- a parallel transcript exporter;
+- a second config loader;
+- a second workflow-state store;
+- wrappers that only rename existing functions;
+- a god service that hides policy and mechanics together.
+
+## 23. Canonical source ownership
+
+| Responsibility | Canonical location |
+|---|---|
+| Plugin registration | `hermes_dynamic_workflows/entry.py` |
+| Workflow tool adapter | `hermes_dynamic_workflows/adapters/workflow.py` |
+| Stop adapter | `hermes_dynamic_workflows/adapters/task_stop.py` |
+| Slash command | `hermes_dynamic_workflows/adapters/commands.py` |
+| Approval hook | `hermes_dynamic_workflows/adapters/hooks.py` |
+| Background lifecycle and controls | `hermes_dynamic_workflows/run/manager.py` |
+| Transcript reconstruction/export | `hermes_dynamic_workflows/run/transcripts.py` |
+| Script parsing and AST policy | `hermes_dynamic_workflows/engine/sandbox.py` |
+| Script execution | `hermes_dynamic_workflows/engine/runtime.py` |
+| `agent` / `pipeline` / `parallel` semantics | `hermes_dynamic_workflows/engine/api.py` |
+| Resume fingerprints/cache | `hermes_dynamic_workflows/engine/cache.py` |
+| Child construction and execution | `hermes_dynamic_workflows/child/runner.py` |
+| Agent-type resolution | `hermes_dynamic_workflows/child/presets.py` |
+| Workspace/worktree behavior | `hermes_dynamic_workflows/child/` |
+| Run persistence | `hermes_dynamic_workflows/storage/store.py` |
+| Control request channel | `hermes_dynamic_workflows/storage/control.py` |
+| Configuration | `hermes_dynamic_workflows/core/config.py` |
+| Shared types and errors | `hermes_dynamic_workflows/core/types.py`, `core/errors.py` |
+| Structured schema validation | `hermes_dynamic_workflows/core/schema.py` |
+| Compact text rendering | `hermes_dynamic_workflows/view/render.py` |
+| TUI controller/model/rendering | `hermes_dynamic_workflows/tui/` |
+| Built-in role instructions | `hermes_dynamic_workflows/agents/` |
+
+If the current source contradicts this table, update the table or follow the actual
+canonical owner. Do not preserve documentation fiction.
+
+## 24. Change protocol
+
+For orchestration changes:
+
+1. identify the user-visible contract;
+2. inspect current implementation and relevant tests;
+3. locate the canonical function;
+4. decide whether the change is action policy or reusable service mechanics;
+5. make the smallest coherent edit;
+6. extend existing state and telemetry;
+7. add focused tests;
+8. run the narrow test set;
+9. run broader regression tests when shared mechanics changed;
+10. read back persisted artifacts and docs;
+11. report what was verified and what was not.
+
+A new abstraction must name its current consumer. “Might be useful later” is not enough.
+
+## 25. Test expectations
+
+Tests should prove behavior, not implementation theater.
+
+When relevant, cover:
+
+- decomposition bounds;
+- one logical worker per task;
+- dependency scheduling;
+- role-based model selection;
+- structured `PASS` / `FAIL` / `BLOCKED`;
+- fail-closed missing or invalid verdicts;
+- bounded repair;
+- accepted-only integration;
+- final verification;
+- persistence and read-back;
+- journal and transcript events;
+- pause, resume, stop, restart, and skip;
+- completion notification;
+- resume cache behavior;
+- approval paths;
+- worktree isolation and conflict handling;
+- timeout and budget limits.
+
+Do not present a synthetic harness as end-to-end proof.
+
+## 26. Known gaps and non-goals
+
+Current gaps relevant to this fork:
+
+- no canonical automatic task decomposer;
+- no default role-based planner/worker/reviewer configuration;
+- no universal reviewed-task state contract;
+- no built-in bounded repair loop;
+- no universal integration step;
+- no verified automatic crash continuation;
+- no web dashboard;
+- no graph/DAG visualization in the current TUI;
+- no current TUI control for skipping one child.
+
+Non-goals unless a proven requirement changes them:
+
+- separate Hermes profiles per role;
+- LangGraph or another workflow engine;
+- a second state database;
+- a web UI with its own backend model;
+- implicit inheritance of full parent memory;
+- bypassing Hermes approval rules.
+
+## 27. Configuration
+
+The plugin reads:
+
+```text
+plugins.entries.dynamic-workflows.dynamic_workflows
 ```
 
-Tool call results:
+from Hermes `config.yaml`, plus `HERMES_DYNAMIC_WORKFLOWS_*` environment overrides.
 
-```jsonc
-// success (plain text, not JSON)
-Structured output provided successfully
-
-// validation failure: errors are the individual items joined by ", "
-{"error":"Output does not match required schema: <errors>"}
-//   each item looks like: /path/to/field: must have required property 'x'
-//             /path: must be <type>      root: must NOT have additional properties
-//             /path: must be equal to one of the allowed values     /path: must match pattern "…"
-
-// no expectation registered (should not occur in theory)
-{"error":"Output does not match required schema: root: no structured-output expectation is registered for this task"}
-
-// maximum attempts exceeded
-{"error":"Output does not match required schema: root: maximum structured output attempts exceeded (5)"}
-```
-
-> Validation prefers `jsonschema` (Draft 2020-12); when it's not installed, it falls back
-> to a built-in lightweight validator (covering common keywords like
-> object/array/string/number, required, enum, additionalProperties).
-
-## Prompt Cache
-
-Subagents are independent `AIAgent`s and inherit Hermes's prompt caching: for cacheable
-models (the Claude family, DashScope Qwen, …) a `cache_control` breakpoint is injected,
-and each subagent reuses the `[tools + system]` prefix across its own multi-turn tool
-calls.
-
-**Sharing the prefix across subagents**: Hermes's `system_and_3` strategy places the
-breakpoint at the end of the system prompt. To make this work, **the subagent system
-prompt stays byte-for-byte identical across the entire fan-out** — it contains only
-stable scaffolding (base instructions + agentType instructions), while per-task context
-(workspace, label, phase, worktree hints) goes into the subagent's first user message
-(`build_child_task_message`). Subagents with the same toolset + same agentType therefore
-share the cache prefix. The savings depend on the provider (0 for non-cacheable models).
-
-## Concurrency and Limits
-
-- **Concurrency slots**: one semaphore per run, capped at `concurrency` (default
-  `min(16, cpu-2)`, and ≤ `max_concurrency`=16). `parallel()/pipeline()` can submit any
-  number of items, but only about slot-many run at once and the rest queue.
-- **Agent cap** `max_agents` (default 1000): a runaway fallback gate, far above any real
-  workflow.
-- **Loop gate**: each `while/for` iteration injects `__wf_tick__()`, which checks for
-  stop / deadline / the loop cap `max_loop_iterations` (default 1e7). This lets the
-  deadline fire even inside a pure compute loop.
-- **Deadline** `workflow_timeout_seconds` (default 900s, paused time not counted).
-- **Subagent timeout** `child_timeout_seconds` (default 300s): a single timeout raises
-  `WorkflowTimeout` back into the script (catchable with `try/except`).
-
-Run-level hard stops (user stop, deadline, budget/agent/loop caps) derive from
-`BaseException`, so the script's `except Exception` cannot swallow them; the sandbox also
-forbids `except:` / `except BaseException`.
-
-## Permission Governance
-
-Three layers, all reusing Hermes's own approval engine rather than rebuilding one:
-
-1. **Launch approval** (`require_launch_approval`, on by default): before a top-level
-   launch — the CLI confirms synchronously; the gateway sends approve/deny buttons and
-   blocks; unattended (no channel) means denial. A nested `workflow()` inherits the
-   already-approved parent run and is not approved separately.
-2. **Subagent command approval** (`child_approval_policy`): subagent tool calls go
-   through the Hermes approval engine as usual (dangerous-command detection, the hardline
-   floor, the permanent allowlist, yolo, gateway async approval). This key only decides
-   what happens when a flagged command would normally prompt a human but no one is
-   present (a background run): `inherit` (follow Hermes `approvals.mode`, default) /
-   `smart` (an assisting LLM guard, recommended for unattended runs) / `deny` / `approve`
-   / `ask` (ask a human if a channel exists, otherwise fall back to `ask_fallback`).
-3. **The pre_tool_call hook**: background subagents run in threads detached from the
-   session context, where Hermes's own approval would, lacking context, either wrongly
-   wave commands through or hang. The hook applies the policy above before Hermes's
-   context branch; when it lets something through it also `approve_session()`s that
-   pattern, so downstream re-gating doesn't turn the command into a pending with no one
-   to answer it. The hardline floor and the permanent allowlist always remain in effect.
-
-## Transcript (Rebuilding the Execution Trace from state.db)
-
-Subagents are independent `AIAgent`s, and their messages land in Hermes's `SessionDB`
-(SQLite). So that users / the main agent can see each subagent's full execution trace,
-the runtime exports these messages as `agent-<sessionId>.jsonl` (+ a `.meta.json`
-sidecar of the same name).
-
-- **Incremental read** (`SessionTranscriptReader`): reads the `messages` / `sessions`
-  tables directly. It first uses a recursive CTE to resolve the **compaction lineage**
-  (when a subagent is context-compacted it spawns a new session, chained into one
-  lineage), then uses `(row count, min/max id, active count and sum of ids)` to decide
-  whether it's append-only — if so it only appends new messages, otherwise it rebuilds
-  wholesale.
-- **Full fallback**: on schema mismatch / unavailable private connection /
-  incremental-read exception, it falls back to the public API
-  `get_messages(include_inactive=True)` and uses a content signature to detect changes.
-- **Live export** (`LiveTranscriptExporter`): refreshes active subagents every 0.5s, with
-  a single reader + single writer running serially (avoiding contention between multiple
-  SQLite connections and the atomic temp file); flushes once more when a subagent reaches
-  a terminal state; and does one final, validated rebuild when the run ends.
-
-`/workflows` and the dashboard use this to show each subagent's prompt, recent tool
-activity, and output, **without depending** on the final output file.
-
-## Sandbox and Determinism
-
-After AST validation the script is `exec`'d with restricted globals; what's gated is
-**capability**, not **control flow**: `if/for/while/try` are allowed (needed for
-loop-until-budget / loop-until-dry), but imports, file/process/network access, dunder
-traversal, `eval/exec/compile/open/getattr…`, class definitions, and dynamic call
-targets are all rejected; time/randomness APIs are forbidden (they break resume). This is
-a guardrail, not a perfect sandbox — true isolation needs subprocesses + RPC (a future
-step).
-
-## Resume / Content-Addressed Cache
-
-`resumeFromRunId` reuses the **unchanged** `agent()` results from the previous run.
-Fingerprints are content-addressed (prompt + relevant opts), so even if the concurrent
-scheduling order changes, unchanged calls still hit. When editing the script, try to keep
-the early, stable `agent()` calls: an early change flows downstream into later prompts and
-reduces reuse, while a late change preserves more of the cache.
-
-## Token Budget
-
-`budget.total` is parsed from a target in the current user message (`+500k`,
-`spend 2M tokens`, `use 1B tokens`, …); `None` if not stated. `spent()` is the token
-count (input + output + reasoning) of this run's completed subagents. Once `total` is
-reached, `agent()` raises `WorkflowLimitExceeded` (a run-level hard stop). The scope is
-**a single run**, not Claude Code's per-turn shared pool — the boundary a standalone tool
-ought to have. Tool inputs / `meta` / config / environment cannot set `total`.
-
-## agentType / worktree / Named Workflows
-
-- **agentType**: `agent(agentType="…")` loads subagent instructions from a workflow agent
-  file. Resolution order: project
-  `.hermes/dynamic-workflows/agents/<name>.{md,yaml,json}` → user
-  `~/.hermes/dynamic-workflows/agents/<name>.…` → the plugin's built-in
-  `agents/<name>.md`. Markdown supports YAML frontmatter (`model` / `toolsets` /
-  `isolation`, …). Built-in: `explore`, `general-purpose`, `plan`, `verification`.
-- **worktree**: `agent(isolation="worktree")` runs each subagent in its own git worktree,
-  preventing conflicts from concurrent edits to the same checkout. This is workspace
-  isolation, not a security sandbox; the worktree is deleted after use by default
-  (`keep_worktrees` off).
-
-## Control (Pause / Resume / Stop / Restart)
-
-The standalone dashboard `hermes-workflows` (in a separate terminal) sends control back
-to the Hermes process that owns the run via an **owner-scoped, expiring request/response
-queue** (kept under the plugin store, opening no local port):
-
-- `x` stops the run and interrupts its active subagents.
-- `p` cooperative pause/resume: while paused, no new subagents or subsequent pipeline
-  stages start (those already running can finish), and paused time does not count toward
-  the deadline.
-- `r` restarts the whole thing as a brand-new run with a new Run ID, using the saved
-  script and args.
-- `s` saves a markdown transcript.
-
-## Configuration
-
-No separate config file: the plugin reads the
-`plugins.entries.dynamic-workflows.dynamic_workflows:` section from Hermes's
-`config.yaml`, and supports `HERMES_DYNAMIC_WORKFLOWS_*` environment variable overrides.
-For the keys, defaults, and meanings, see the Configuration section of the README.
+See `README.md` for the current user-facing configuration example. Keep the canonical
+key definitions in `core/config.py`; documentation must follow the implementation.
