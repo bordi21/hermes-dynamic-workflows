@@ -1,11 +1,12 @@
-"""Worker, reviewer, and bounded repair lifecycle for reviewed tasks."""
+"""Worker, reviewer, repair, and PASS-only integration lifecycle."""
 
 from __future__ import annotations
 
 import json
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import Any
 
+from ..child.worktree import WorkspaceLease, create_workspace_lease
 from ..contracts.packages import (
     REPAIR_PACKAGE_SCHEMA,
     REVIEW_VERDICT_PACKAGE_SCHEMA,
@@ -13,17 +14,18 @@ from ..contracts.packages import (
 )
 from ..core.errors import ReviewedStateError
 from ..core.schema import validate_schema
+from ..engine.api import WorkflowAPI
+from ..engine.integration import integrate_reviewed_workspace, reviewed_workspace_context
 
 
 class ReviewedTaskExecutionAction:
-    """Execute one ready task through worker, review, and bounded repair.
+    """Execute one ready task through review, bounded repair, and integration.
 
-    The action owns lifecycle policy and canonical reviewed-state transitions. Child
-    execution still goes through ``WorkflowAPI.agent`` so model routing, approvals,
-    structured output, accounting, transcripts, and runtime limits remain canonical.
-
-    PASS stops at the accepted verdict. Workspace integration is deliberately left to
-    the existing PASS-only integration action, which needs the concrete workspace lease.
+    The action owns the concrete task worktree for the entire lifecycle. Every
+    child still runs through ``WorkflowAPI.agent`` so routing, approvals,
+    structured output, accounting, transcripts, and runtime limits remain
+    canonical. Workers, reviewers, and fresh repair sessions all operate on the
+    same isolated workspace; only an evidence-backed PASS is integrated.
     """
 
     async def run(self, api: Any, *, task_id: str) -> dict[str, Any]:
@@ -36,100 +38,172 @@ class ReviewedTaskExecutionAction:
             raise ReviewedStateError(f"task {task_id} is not dependency-ready")
 
         task = deepcopy(task_state["task"])
-        api.context.state.reviewed.start_task(task_id)
-        _journal(api, "reviewed_task_started", task, attempt=1)
-
-        result = await self._worker(api, task=task, attempt=1)
-        api.context.state.reviewed.submit_worker_result(task_id, result)
-        _journal(api, "reviewed_worker_result", task, attempt=1, status=result["status"])
-
-        verdict = await self._review(api, plan=plan, task=task, result=result)
-        api.context.state.reviewed.submit_review_verdict(task_id, verdict)
-        _journal(api, "reviewed_task_verdict", task, attempt=1, verdict=verdict["verdict"])
-
+        lease = _create_task_workspace(api, task)
+        workspace_api = _workspace_api(api, lease.cwd)
         max_repairs = int(plan["max_repairs_per_task"])
         repair_attempt = 0
-        while verdict["verdict"] == "FAIL" and repair_attempt < max_repairs:
-            repair_attempt += 1
-            worker_attempt = repair_attempt + 1
-            repair = {
-                "schema_version": "1.0",
-                "plan_id": task["plan_id"],
-                "task_id": task["task_id"],
-                "repair_attempt": repair_attempt,
-                "original_task": deepcopy(task),
-                "previous_result": deepcopy(result),
-                "review_verdict": deepcopy(verdict),
-            }
-            validate_schema(repair, REPAIR_PACKAGE_SCHEMA)
-            api.context.state.reviewed.start_repair(task_id, repair)
+        integration_result: dict[str, Any] | None = None
+
+        try:
+            api.context.state.reviewed.start_task(task_id)
             _journal(
                 api,
-                "reviewed_repair_started",
+                "reviewed_task_started",
                 task,
-                attempt=worker_attempt,
-                repairAttempt=repair_attempt,
+                attempt=1,
+                workspace=reviewed_workspace_context(lease),
             )
 
-            result = await self._repair_worker(
-                api,
-                repair=repair,
-                attempt=worker_attempt,
-            )
-            api.context.state.reviewed.submit_repair_result(task_id, result)
+            result = await self._worker(workspace_api, task=task, attempt=1)
+            api.context.state.reviewed.submit_worker_result(task_id, result)
             _journal(
                 api,
-                "reviewed_repair_result",
+                "reviewed_worker_result",
                 task,
-                attempt=worker_attempt,
-                repairAttempt=repair_attempt,
+                attempt=1,
                 status=result["status"],
+                workspace=reviewed_workspace_context(lease),
             )
 
-            verdict = await self._review(api, plan=plan, task=task, result=result)
+            verdict = await self._review(
+                workspace_api,
+                plan=plan,
+                task=task,
+                result=result,
+                lease=lease,
+            )
             api.context.state.reviewed.submit_review_verdict(task_id, verdict)
             _journal(
                 api,
                 "reviewed_task_verdict",
                 task,
-                attempt=worker_attempt,
-                repairAttempt=repair_attempt,
+                attempt=1,
                 verdict=verdict["verdict"],
             )
 
-        exhausted = verdict["verdict"] == "FAIL"
-        if exhausted:
-            api.context.state.reviewed.mark_task_failed(task_id)
-            _journal(
-                api,
-                "reviewed_task_failed",
-                task,
-                attempt=int(result["attempt"]),
-                reason="repair limit exhausted",
-            )
+            while verdict["verdict"] == "FAIL" and repair_attempt < max_repairs:
+                repair_attempt += 1
+                worker_attempt = repair_attempt + 1
+                repair = {
+                    "schema_version": "1.0",
+                    "plan_id": task["plan_id"],
+                    "task_id": task["task_id"],
+                    "repair_attempt": repair_attempt,
+                    "original_task": deepcopy(task),
+                    "previous_result": deepcopy(result),
+                    "review_verdict": deepcopy(verdict),
+                }
+                validate_schema(repair, REPAIR_PACKAGE_SCHEMA)
+                api.context.state.reviewed.start_repair(task_id, repair)
+                _journal(
+                    api,
+                    "reviewed_repair_started",
+                    task,
+                    attempt=worker_attempt,
+                    repairAttempt=repair_attempt,
+                    workspace=reviewed_workspace_context(lease),
+                )
 
-        api.context.notify()
-        return {
-            "task_id": task_id,
-            "status": "FAILED" if exhausted else verdict["verdict"],
-            "worker_result": deepcopy(result),
-            "review_verdict": deepcopy(verdict),
-            "repairs_used": repair_attempt,
-            "repairs_allowed": max_repairs,
-        }
+                result = await self._repair_worker(
+                    workspace_api,
+                    repair=repair,
+                    attempt=worker_attempt,
+                )
+                api.context.state.reviewed.submit_repair_result(task_id, result)
+                _journal(
+                    api,
+                    "reviewed_repair_result",
+                    task,
+                    attempt=worker_attempt,
+                    repairAttempt=repair_attempt,
+                    status=result["status"],
+                    workspace=reviewed_workspace_context(lease),
+                )
+
+                verdict = await self._review(
+                    workspace_api,
+                    plan=plan,
+                    task=task,
+                    result=result,
+                    lease=lease,
+                )
+                api.context.state.reviewed.submit_review_verdict(task_id, verdict)
+                _journal(
+                    api,
+                    "reviewed_task_verdict",
+                    task,
+                    attempt=worker_attempt,
+                    repairAttempt=repair_attempt,
+                    verdict=verdict["verdict"],
+                )
+
+            exhausted = verdict["verdict"] == "FAIL"
+            if exhausted:
+                api.context.state.reviewed.mark_task_failed(task_id)
+                _journal(
+                    api,
+                    "reviewed_task_failed",
+                    task,
+                    attempt=int(result["attempt"]),
+                    reason="repair limit exhausted",
+                )
+                status = "FAILED"
+            elif verdict["verdict"] == "PASS":
+                integration_result = integrate_reviewed_workspace(
+                    api.context.state.reviewed,
+                    task_id=task_id,
+                    lease=lease,
+                )
+                status = str(integration_result["status"])
+                _journal(
+                    api,
+                    "reviewed_task_integration",
+                    task,
+                    attempt=int(result["attempt"]),
+                    status=status,
+                    sourceCommit=integration_result.get("source_commit"),
+                    integratedCommit=integration_result.get("integrated_commit"),
+                    error=integration_result.get("error") or "",
+                )
+            else:
+                status = verdict["verdict"]
+
+            workspace = reviewed_workspace_context(lease)
+            api.context.notify()
+            return {
+                "task_id": task_id,
+                "status": status,
+                "worker_result": deepcopy(result),
+                "review_verdict": deepcopy(verdict),
+                "repairs_used": repair_attempt,
+                "repairs_allowed": max_repairs,
+                "workspace": workspace,
+                "integration": deepcopy(integration_result),
+            }
+        finally:
+            lease.cleanup()
 
     async def run_ready(self, api: Any) -> list[dict[str, Any]]:
-        """Run the currently ready task set sequentially in canonical plan order."""
+        """Run dependency-ready tasks sequentially in canonical plan order.
+
+        Re-evaluate readiness after every accepted integration so tasks that
+        depend on newly integrated predecessors become runnable in the same
+        lifecycle invocation.
+        """
 
         results: list[dict[str, Any]] = []
-        for task_id in list(api.context.state.reviewed.ready_task_ids()):
-            results.append(await self.run(api, task_id=task_id))
-        return results
+        while True:
+            ready = list(api.context.state.reviewed.ready_task_ids())
+            if not ready:
+                return results
+            for task_id in ready:
+                results.append(await self.run(api, task_id=task_id))
 
     async def _worker(self, api: Any, *, task: dict[str, Any], attempt: int) -> dict[str, Any]:
         prompt = (
-            "Execute exactly this reviewed-workflow TaskPackage. Return only the required "
-            "WorkerResultPackage through structured output. Do not self-review or broaden scope.\n\n"
+            "Execute exactly this reviewed-workflow TaskPackage inside the current isolated task "
+            "workspace. Return only the required WorkerResultPackage through structured output. "
+            "Do not self-review or broaden scope.\n\n"
             f"Attempt: {attempt}\nTaskPackage:\n{_json(task)}"
         )
         result = await api.agent(
@@ -139,7 +213,6 @@ class ReviewedTaskExecutionAction:
                 "phase": "Execution",
                 "schema": WORKER_RESULT_PACKAGE_SCHEMA,
                 "agentType": "worker",
-                "isolation": "worktree",
             },
         )
         _validate_worker_result(result, task=task, attempt=attempt)
@@ -153,8 +226,9 @@ class ReviewedTaskExecutionAction:
         attempt: int,
     ) -> dict[str, Any]:
         prompt = (
-            "Perform a fresh, materially different repair using this RepairPackage. Preserve "
-            "the original criteria and return only a WorkerResultPackage through structured output.\n\n"
+            "Start a fresh repair-agent session in the retained task workspace. Perform a "
+            "materially different repair using this RepairPackage, preserve the original criteria, "
+            "and return only a WorkerResultPackage through structured output.\n\n"
             f"Worker attempt: {attempt}\nRepairPackage:\n{_json(repair)}"
         )
         result = await api.agent(
@@ -164,7 +238,6 @@ class ReviewedTaskExecutionAction:
                 "phase": "Repair",
                 "schema": WORKER_RESULT_PACKAGE_SCHEMA,
                 "agentType": "repair-worker",
-                "isolation": "worktree",
             },
         )
         _validate_worker_result(result, task=repair["original_task"], attempt=attempt)
@@ -177,6 +250,7 @@ class ReviewedTaskExecutionAction:
         plan: dict[str, Any],
         task: dict[str, Any],
         result: dict[str, Any],
+        lease: WorkspaceLease,
     ) -> dict[str, Any]:
         request = {
             "schema_version": "1.0",
@@ -186,11 +260,14 @@ class ReviewedTaskExecutionAction:
             "task": deepcopy(task),
             "worker_result": deepcopy(result),
         }
+        workspace = reviewed_workspace_context(lease)
         prompt = (
             "Review this attempt fail-closed against every acceptance criterion and the planner's "
-            "reviewer guidelines. Return PASS, FAIL, or BLOCKED only through the required "
+            "reviewer guidelines. Inspect the current task workspace and its concrete diff evidence, "
+            "not only the worker's claims. Return PASS, FAIL, or BLOCKED only through the required "
             "ReviewVerdictPackage. Do not repair the work.\n\n"
-            f"ReviewRequestPackage:\n{_json(request)}"
+            f"ReviewRequestPackage:\n{_json(request)}\n\n"
+            f"WorkspaceReviewContext:\n{_json(workspace)}"
         )
         verdict = await api.agent(
             prompt,
@@ -209,6 +286,38 @@ class ReviewedTaskExecutionAction:
         if verdict.get("attempt") != result["attempt"]:
             raise ReviewedStateError("review verdict attempt does not match the worker result")
         return deepcopy(verdict)
+
+
+def _create_task_workspace(api: Any, task: dict[str, Any]) -> WorkspaceLease:
+    try:
+        return create_workspace_lease(
+            cwd=api.frame.cwd,
+            isolation="worktree",
+            label=f"reviewed-{task['task_id']}",
+            task_id=f"reviewed-{task['plan_id']}-{task['task_id']}",
+            keep_worktree=bool(getattr(getattr(api, "config", None), "keep_worktrees", False)),
+        )
+    except (OSError, ValueError) as exc:
+        raise ReviewedStateError(
+            f"could not create isolated workspace for task {task['task_id']}: {exc}"
+        ) from exc
+
+
+def _workspace_api(api: Any, cwd: str) -> Any:
+    """Create a canonical API view rooted at one retained task workspace."""
+
+    factory = getattr(api, "for_workspace", None)
+    if callable(factory):
+        return factory(cwd)
+    if not hasattr(api, "frame") or not hasattr(api, "context"):
+        raise ReviewedStateError("workflow API cannot create a scoped task workspace view")
+    frame = copy(api.frame)
+    frame.cwd = cwd
+    return WorkflowAPI(
+        context=api.context,
+        frame=frame,
+        depth=int(getattr(api, "depth", 0)),
+    )
 
 
 def _task_and_plan(api: Any, task_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
