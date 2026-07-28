@@ -180,6 +180,11 @@ class _API:
         return _ScopedAPI(self, cwd)
 
 
+class _BrokenScopedAPI(_API):
+    def for_workspace(self, cwd: str) -> _ScopedAPI:
+        raise ReviewedStateError("scope failed")
+
+
 class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
     async def _run(
         self,
@@ -301,7 +306,13 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(api.context.state.reviewed.snapshot()["tasks"][0]["status"], "PASS")
         event = next(item for item in api.context.events if item["type"] == "reviewed_task_integration")
         self.assertEqual(event["status"], "CONFLICT")
-        self.assertEqual(event["error"], "conflict")
+        self.assertEqual(event["summary"], "integration conflict")
+        self.assertTrue(
+            any(
+                item["reference"] == "git:integration-error" and item["summary"] == "conflict"
+                for item in event["evidence"]
+            )
+        )
 
     async def test_dependency_and_lineage_fail_closed(self):
         api = _API([])
@@ -322,6 +333,21 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
                 await ReviewedTaskExecutionAction().run(wrong, task_id="A")
         self.assertEqual(wrong.context.state.reviewed.snapshot()["tasks"][0]["status"], "EXECUTING")
         self.assertEqual(lease.cleanup_calls, 1)
+
+    async def test_workspace_scope_failure_cleans_lease_before_state_start(self):
+        api = _BrokenScopedAPI([])
+        api.context.state.reviewed.register_plan(_plan(_task()))
+        lease = _Lease()
+
+        with patch(
+            "hermes_dynamic_workflows.actions.execution.create_workspace_lease",
+            return_value=lease,
+        ):
+            with self.assertRaisesRegex(ReviewedStateError, "scope failed"):
+                await ReviewedTaskExecutionAction().run(api, task_id="A")
+
+        self.assertEqual(lease.cleanup_calls, 1)
+        self.assertEqual(api.context.state.reviewed.snapshot()["tasks"][0]["status"], "PLANNED")
 
     async def test_run_ready_rechecks_dependencies_after_each_integration(self):
         api = _API(
@@ -355,12 +381,15 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
                 "reviewer:B:attempt-1",
             ],
         )
-        self.assertEqual([call["cwd"] for call in api.calls], [
-            "/tmp/A-workspace",
-            "/tmp/A-workspace",
-            "/tmp/B-workspace",
-            "/tmp/B-workspace",
-        ])
+        self.assertEqual(
+            [call["cwd"] for call in api.calls],
+            [
+                "/tmp/A-workspace",
+                "/tmp/A-workspace",
+                "/tmp/B-workspace",
+                "/tmp/B-workspace",
+            ],
+        )
 
 
 if __name__ == "__main__":
