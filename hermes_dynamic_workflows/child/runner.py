@@ -336,8 +336,12 @@ class HermesChildAgentRunner(ChildAgentRunner):
             "platform": "cli",
             "tool_progress_callback": self._make_tool_progress_callback(request, lease),
             "thinking_callback": _child_thinking_callback,
-            "skip_context_files": True,
-            "skip_memory": True,
+            # Workflow children are fresh sessions of the launching Hermes profile.
+            # They inherit SOUL/project context and profile memory; only the
+            # task transcript remains isolated and is supplied below as a
+            # scoped first user message.
+            "skip_context_files": False,
+            "skip_memory": False,
             "clarify_callback": _child_clarify_callback,
             "ephemeral_system_prompt": child_prompt,
             "session_db": session_db,

@@ -30,7 +30,6 @@ class PluginConfig:
         "workflows",
         "delegation",
         "code_execution",
-        "memory",
         "messaging",
         "clarify",
     )

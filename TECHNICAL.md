@@ -394,3 +394,14 @@ No separate config file: the plugin reads the
 `plugins.entries.dynamic-workflows.dynamic_workflows:` section from Hermes's
 `config.yaml`, and supports `HERMES_DYNAMIC_WORKFLOWS_*` environment variable overrides.
 For the keys, defaults, and meanings, see the Configuration section of the README.
+
+## Foundation implementation status (T00-T02)
+
+The first reviewed-workflow foundation slice is implemented as follows:
+
+- workflow child `AIAgent` sessions load the launching Hermes profile context files and memory;
+- task-specific context remains isolated in the child session's scoped first user message;
+- the memory toolset is no longer globally blocked for workflow children, while recursive workflow/delegation surfaces remain blocked;
+- nine canonical Draft 2020-12 handoff schemas define planner, worker, reviewer, repair, integration, final-validation, and final-report transport.
+
+This slice does not yet implement the orchestration FSM, repair loop, PASS-only integration, or final replanning. Those remain subsequent tasks. Live Hermes canary verification is separate from the repository unit-test baseline.
