@@ -65,17 +65,18 @@ class ReviewedWorkflowAction:
         while True:
             api.context.check_runtime()
             latest = _latest_cycle(api.context.state.reviewed.snapshot())
+            plan_id = str(latest["plan_id"])
             if latest.get("final_validation") is None:
                 api.phase("Execution")
                 api.log(
                     f"Executing reviewed workflow cycle {latest['cycle']} "
-                    f"({latest['plan_id']})."
+                    f"({plan_id})."
                 )
                 await self.executor.run_ready(api)
-                _skip_unrunnable_tasks(api)
+                _skip_unrunnable_tasks(api, plan_id=plan_id)
                 _require_cycle_terminal(
                     api.context.state.reviewed.snapshot(),
-                    plan_id=str(latest["plan_id"]),
+                    plan_id=plan_id,
                 )
 
                 api.phase("Final Validation")
@@ -84,14 +85,14 @@ class ReviewedWorkflowAction:
                 )
                 validation_result = await self.validator.run(
                     api,
-                    plan_id=str(latest["plan_id"]),
+                    plan_id=plan_id,
                 )
                 if validation_result["status"] == "REPLANNED":
                     continue
             else:
                 _require_cycle_terminal(
                     api.context.state.reviewed.snapshot(),
-                    plan_id=str(latest["plan_id"]),
+                    plan_id=plan_id,
                 )
                 _require_terminal_validation_state(latest)
 
@@ -101,7 +102,9 @@ class ReviewedWorkflowAction:
 
 
 def _normalize_objective(value: Any) -> str:
-    objective = str(value or "").strip()
+    if not isinstance(value, str):
+        raise ReviewedStateError("reviewed workflow objective must be a string")
+    objective = value.strip()
     if not objective:
         raise ReviewedStateError("reviewed workflow objective must be a non-empty string")
     return objective
@@ -117,8 +120,8 @@ def _latest_cycle(snapshot: dict[str, Any]) -> dict[str, Any]:
         raise ReviewedStateError("reviewed workflow has invalid planning-cycle state") from exc
 
 
-def _skip_unrunnable_tasks(api: Any) -> list[str]:
-    """Transitively skip PLANNED tasks whose dependencies ended non-integrated."""
+def _skip_unrunnable_tasks(api: Any, *, plan_id: str) -> list[str]:
+    """Transitively skip current-cycle tasks blocked by terminal dependencies."""
 
     skipped: list[str] = []
     while True:
@@ -130,7 +133,11 @@ def _skip_unrunnable_tasks(api: Any) -> list[str]:
         }
         changed = False
         for task in snapshot.get("tasks") or []:
-            if not isinstance(task, dict) or task.get("status") != "PLANNED":
+            if (
+                not isinstance(task, dict)
+                or task.get("plan_id") != plan_id
+                or task.get("status") != "PLANNED"
+            ):
                 continue
             dependency_outcomes = [
                 (dependency, by_id.get(dependency, {}).get("status"))
