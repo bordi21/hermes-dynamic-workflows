@@ -7,6 +7,7 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  issues: write
   statuses: write
 
 jobs:
@@ -49,6 +50,20 @@ jobs:
             exit "$focused_status"
           fi
           python -m unittest discover -s tests -v 2>&1 | tee regression-test.log
+      - name: Publish failure details
+        if: steps.tests.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '### Temporary T11 verification failure'
+            echo
+            echo '```text'
+            if [ -f focused-test.log ]; then tail -n 100 focused-test.log; fi
+            if [ -f regression-test.log ]; then tail -n 100 regression-test.log; fi
+            echo '```'
+          } > verification-failure.md
+          gh pr comment 12 --body-file verification-failure.md
       - name: Publish verification status
         if: always()
         env:
