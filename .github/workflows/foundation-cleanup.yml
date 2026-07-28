@@ -38,8 +38,8 @@ jobs:
       - name: Verify final suite
         run: python -m unittest discover -s tests -v
 
-      - name: Restore generated package metadata
-        run: git checkout origin/master -- hermes_dynamic_workflows.egg-info
+      - name: Remove generated package metadata
+        run: rm -rf hermes_dynamic_workflows.egg-info
 
       - name: Write tracked foundation report
         shell: bash
