@@ -1,0 +1,88 @@
+name: foundation-refactor
+
+on:
+  push:
+    branches:
+      - refactor/t00-t02-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install package
+        run: python -m pip install -e .
+
+      - name: Run pre-change baseline
+        id: baseline
+        shell: bash
+        run: |
+          set +e
+          python -m unittest discover -s tests -v > /tmp/foundation-baseline.log 2>&1
+          status=$?
+          cat /tmp/foundation-baseline.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Stop on pre-existing failures
+        if: steps.baseline.outputs.status != '0'
+        run: |
+          echo "The pre-change baseline failed; refusing to apply the refactor."
+          exit 1
+
+      - name: Apply T01 and T02
+        run: python tools/apply_foundation_refactor.py apply
+
+      - name: Run full post-change suite
+        id: final
+        shell: bash
+        run: |
+          set +e
+          python -m unittest discover -s tests -v > /tmp/foundation-final.log 2>&1
+          status=$?
+          cat /tmp/foundation-final.log
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Write verified baseline report
+        if: always() && steps.baseline.outputs.status == '0'
+        run: |
+          python tools/apply_foundation_refactor.py report \
+            --base-commit "$(git rev-parse HEAD^)" \
+            --baseline-log /tmp/foundation-baseline.log \
+            --baseline-status "${{ steps.baseline.outputs.status }}" \
+            --final-log /tmp/foundation-final.log \
+            --final-status "${{ steps.final.outputs.status }}"
+
+      - name: Stop on regressions
+        if: steps.final.outputs.status != '0'
+        run: |
+          echo "Post-change tests failed; refusing to commit the refactor."
+          exit 1
+
+      - name: Remove one-shot machinery
+        run: |
+          rm -f tools/apply_foundation_refactor.py
+          rm -f .github/workflows/foundation-refactor.yml
+
+      - name: Commit verified foundation
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: implement T00-T02 workflow foundation"
+          git push origin HEAD:refactor/t00-t02-foundation
