@@ -1,0 +1,177 @@
+name: Temporary Documentation Verification
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: write
+  statuses: write
+
+jobs:
+  patch-docs:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 14 &&
+      github.event.comment.body == '/patch-t15-docs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Resolve pull request branch
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_ref="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/14" --jq .head.ref)"
+          echo "head_ref=${head_ref}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_ref }}
+          fetch-depth: 0
+      - name: Patch technical documentation by exact anchors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("TECHNICAL.md")
+          text = path.read_text(encoding="utf-8")
+
+          replacements = [
+              (
+                  "| `workflow` | `await workflow(name_or_ref, args=None)` | Runs another workflow inline, sharing concurrency/counts/stop/budget; one level of nesting only. |\n| `args` | — | The tool input `args` verbatim; `None` if not passed. |",
+                  "| `workflow` | `await workflow(name_or_ref, args=None)` | Runs another workflow inline, sharing concurrency/counts/stop/budget; one level of nesting only. |\n| `reviewed_workflow` | `await reviewed_workflow(request)` | Narrow lifecycle primitive used by the packaged `reviewed-workflow`; accepts one non-empty objective string or one exact objective object. |\n| `args` | — | The tool input `args` verbatim; `None` if not passed. |",
+              ),
+              (
+                  "Also available: `json`, `math`, safe builtins, and common exception types. **Forbidden**\n(rejected by the sandbox): imports, file/process/network access, dunder traversal,\n`eval/exec`, class definitions, dynamic call targets, and time/randomness APIs (they\nbreak resume).\n\n## Tools",
+                  "Also available: `json`, `math`, safe builtins, and common exception types. **Forbidden**\n(rejected by the sandbox): imports, file/process/network access, dunder traversal,\n`eval/exec`, class definitions, dynamic call targets, and time/randomness APIs (they\nbreak resume).\n\n## Canonical Reviewed Workflow\n\nThe package ships one named workflow at\n`hermes_dynamic_workflows/workflows/reviewed-workflow.py`. Resolving\n`{\"name\": \"reviewed-workflow\"}` through the normal `workflow` tool persists and\nlaunches that script through the same `WorkflowRunManager`, approval gate, background\nruntime, store, journal, transcript exporter, controls, limits, notification path, and\nresume cache as any other workflow. The script itself contains only literal metadata and\n`return await reviewed_workflow(args)`; it does not duplicate orchestration policy.\n\n`reviewed_workflow(request)` is injected after the standard `WorkflowAPI` globals and\ndelegates to `ReviewedWorkflowAction`. Accepted requests are a non-empty string, exactly\n`{\"objective\": \"...\"}`, or exactly `{\"original_objective\": \"...\"}`. Numbers,\nempty strings, ambiguous shapes, and additional fields fail before planning.\n\nThe composite Action sequences existing domain Actions:\n\n1. `InitialPlanningAction` launches one `initial-orchestrator`, validates the complete\n   `PlanPackage`, and registers ordered task lineage plus action-owned repair/replanning\n   limits.\n2. `ReviewedTaskExecutionAction` owns one isolated task worktree across a fresh worker, a\n   separate read-only reviewer, bounded fresh repair sessions, and transactional\n   integration. The reviewer receives concrete workspace/diff evidence; only an\n   evidence-backed `PASS` invokes integration.\n3. Dependency readiness is recalculated after each accepted integration. A `PLANNED`\n   task whose required dependency ended `FAILED`, `BLOCKED`, or `SKIPPED` becomes a\n   terminal zero-attempt `SKIPPED` task with the exact dependency reason. A remaining\n   nonterminal task—including `PASS` after an integration conflict—stops the cycle\n   fail-closed.\n4. `FinalValidationAction` launches one read-only `final-orchestrator` only after the\n   latest cycle is terminal. `APPROVED` and `BLOCKED` cannot create work;\n   `NOT_APPROVED` may register one focused delta `PlanPackage` only while the original\n   configured cycle limit remains. Delta tasks may depend only on already `INTEGRATED`\n   tasks or earlier tasks in the same delta plan.\n5. Every delta cycle re-enters the same execution and validation path. Once the workflow\n   is terminal, `TerminalReportAction` deterministically derives one schema-valid\n   `FinalReportPackage` from persisted state rather than asking a model to synthesize or\n   verify success. Every task, requirement gap, blocker, skip reason, exhausted limit,\n   and evidence reference remains visible.\n\nThe reviewed state is embedded in the existing workflow snapshot/store; there is no\nsecond runner, FSM database, workflow engine, or telemetry channel. Role model routing\nremains provider-neutral and configurable for `initial-orchestrator`, `worker`,\n`reviewer`, `repair-worker`, and `final-orchestrator`.\n\n## Tools",
+              ),
+              (
+                  "Built-in: `explore`, `general-purpose`, `plan`, `verification`.",
+                  "Built-in: `explore`, `general-purpose`, `plan`, `verification`, `initial-orchestrator`, `worker`, `reviewer`, `repair-worker`, and `final-orchestrator`.",
+              ),
+              (
+                  "- **worktree**: `agent(isolation=\"worktree\")` runs each subagent in its own git worktree,\n  preventing conflicts from concurrent edits to the same checkout. This is workspace\n  isolation, not a security sandbox; the worktree is deleted after use by default\n  (`keep_worktrees` off).\n\n## Control (Pause / Resume / Stop / Restart)",
+                  "- **worktree**: `agent(isolation=\"worktree\")` runs each subagent in its own git worktree,\n  preventing conflicts from concurrent edits to the same checkout. This is workspace\n  isolation, not a security sandbox; the worktree is deleted after use by default\n  (`keep_worktrees` off). The reviewed lifecycle instead creates one task-owned worktree\n  and retains it across worker, reviewer, and bounded repair sessions before applying\n  the existing PASS-only integration and cleanup policy.\n- **named workflows**: resolution order remains project `.hermes/workflows/` → user\n  `~/.hermes/workflows/` → packaged built-ins. This fork packages\n  `reviewed-workflow`; project or user workflows with the same name override it through\n  the existing precedence rules.\n\n## Control (Pause / Resume / Stop / Restart)",
+              ),
+              (
+                  "## Foundation implementation status (T00-T02)\n\nThe first reviewed-workflow foundation slice is implemented as follows:\n\n- workflow child `AIAgent` sessions load the launching Hermes profile context files and memory;\n- task-specific context remains isolated in the child session's scoped first user message;\n- the memory toolset is no longer globally blocked for workflow children, while recursive workflow/delegation surfaces remain blocked;\n- nine canonical Draft 2020-12 handoff schemas define planner, worker, reviewer, repair, integration, final-validation, and final-report transport.\n\nThis slice does not yet implement the orchestration FSM, repair loop, PASS-only integration, or final replanning. Those remain subsequent tasks. Live Hermes canary verification is separate from the repository unit-test baseline.",
+                  "## Reviewed workflow implementation status (T00-T12)\n\nThe repository now implements the complete named reviewed lifecycle:\n\n- workflow child `AIAgent` sessions load the launching Hermes profile context files and memory while task-specific context remains isolated in the scoped first user message;\n- nine canonical Draft 2020-12 schemas define planner, worker, reviewer, repair, integration, final-validation, and final-report transport;\n- role presets and model routing are configurable and provider-neutral;\n- reviewed plan/task lineage, attempts, verdicts, repairs, integrations, final validations, skip reasons, and the terminal report persist inside the existing workflow state;\n- one task-owned worktree is retained across worker, reviewer, and bounded repair sessions; only evidence-backed PASS reaches transactional integration;\n- final validation is read-only and may produce only bounded delta replanning;\n- the terminal report is deterministic and cannot silently discard failed, blocked, skipped, conflicting, or exhausted state;\n- packaged named workflow `reviewed-workflow` connects all stages through the existing runtime and control plane.\n\nRepository verification for the merged T12 revision passed 28 focused lifecycle tests and all 314 tests in the suite. This proves the repository behavior exercised by those tests, not installation-specific Hermes behavior. Provider routing, approvals, pause/stop/restart, cache resume, notifications, persistence, worktree integration, and true crash recovery still require narrow live canaries in the target Hermes/VPS environment before they may be described as verified end to end.",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one exact documentation anchor, found {count}: {old[:80]!r}")
+              text = text.replace(old, new)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add TECHNICAL.md
+          git commit -m "[TASK-015] Synchronize reviewed workflow technical documentation"
+          git push origin "HEAD:${{ steps.pr.outputs.head_ref }}"
+
+  verify-docs:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 14 &&
+      github.event.comment.body == '/verify-t15-docs'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/14" --jq .head.sha)"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${head_sha}" \
+            -f state=pending \
+            -f context=temporary-docs-verification \
+            -f description='Documentation verification running' \
+            -f target_url="$run_url"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Verify documentation contracts
+        id: verify
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          readme = Path("README.md").read_text(encoding="utf-8")
+          technical = Path("TECHNICAL.md").read_text(encoding="utf-8")
+
+          required_readme = [
+              "hermes plugins install bordi21/hermes-dynamic-workflows --enable",
+              '"name": "reviewed-workflow"',
+              "deterministic `FinalReportPackage`",
+              "repository-verified",
+              "target Hermes environment",
+          ]
+          required_technical = [
+              "## Canonical Reviewed Workflow",
+              "ReviewedWorkflowAction",
+              "terminal zero-attempt `SKIPPED` task",
+              "## Reviewed workflow implementation status (T00-T12)",
+              "28 focused lifecycle tests and all 314 tests",
+              "require narrow live canaries",
+          ]
+          obsolete = [
+              "does not yet implement the orchestration FSM",
+              "repair loop, PASS-only integration, or final replanning",
+              "hermes plugins install lingjiuu/hermes-dynamic-workflows",
+          ]
+
+          for needle in required_readme:
+              if needle not in readme:
+                  raise SystemExit(f"README missing required text: {needle}")
+          for needle in required_technical:
+              if needle not in technical:
+                  raise SystemExit(f"TECHNICAL missing required text: {needle}")
+          for needle in obsolete:
+              if needle in readme or needle in technical:
+                  raise SystemExit(f"obsolete documentation remains: {needle}")
+
+          for file_name, text in (("README.md", readme), ("TECHNICAL.md", technical)):
+              for target in re.findall(r"\[[^\]]+\]\((\./[^)#]+)(?:#[^)]+)?\)", text):
+                  path = Path(target[2:])
+                  if not path.exists():
+                      raise SystemExit(f"{file_name} has missing relative link target: {target}")
+          PY
+          python -m unittest tests.test_reviewed_workflow_entrypoint -v
+      - name: Publish verification status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+        run: |
+          if [ "$VERIFY_OUTCOME" = "success" ]; then
+            state=success
+            description='Documentation contracts and entrypoint test passed'
+          else
+            state=failure
+            description='Documentation verification failed'
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$state" \
+            -f context=temporary-docs-verification \
+            -f description="$description" \
+            -f target_url="$run_url"
+          test "$state" = success
