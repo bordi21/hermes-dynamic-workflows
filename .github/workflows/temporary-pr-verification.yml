@@ -1,0 +1,70 @@
+name: Temporary PR Verification
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  verify:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 11 &&
+      github.event.comment.body == '/verify-t10'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.issue.number }}" --jq .head.sha)"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${head_sha}" \
+            -f state=pending \
+            -f context=temporary-pr-verification \
+            -f description='T10 focused and regression verification running'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Run focused and regression verification
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_final_validation_action tests.test_initial_planning -v 2>&1 | tee focused-test.log
+          focused_status=${PIPESTATUS[0]}
+          if [ "$focused_status" -ne 0 ]; then
+            exit "$focused_status"
+          fi
+          python -m unittest discover -s tests -v 2>&1 | tee regression-test.log
+      - name: Publish verification status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" = "success" ]; then
+            state=success
+            description='T10 focused and regression verification passed'
+          else
+            state=failure
+            description='T10 focused or regression verification failed'
+          fi
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$state" \
+            -f context=temporary-pr-verification \
+            -f description="$description"
+          test "$state" = success
