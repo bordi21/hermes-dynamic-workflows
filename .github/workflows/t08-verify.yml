@@ -1,0 +1,27 @@
+name: T08 Verification
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [feat/t08-reviewed-task-lifecycle]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Run focused T08 tests
+        run: python -m unittest tests.test_reviewed_task_execution -v
+      - name: Run complete regression suite
+        run: python -m unittest discover -s tests -v
