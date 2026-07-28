@@ -1,0 +1,96 @@
+name: Temporary PR Verification
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  statuses: write
+
+jobs:
+  verify:
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.issue.number == 13 &&
+      github.event.comment.body == '/verify-t12'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.issue.number }}" --jq .head.sha)"
+          echo "head_sha=${head_sha}" >> "$GITHUB_OUTPUT"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${head_sha}" \
+            -f state=pending \
+            -f context=temporary-pr-verification \
+            -f description='T12 focused and regression verification running' \
+            -f target_url="$run_url"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install package
+        run: python -m pip install -e .
+      - name: Run focused and regression verification
+        id: tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tests.test_reviewed_workflow_action \
+            tests.test_reviewed_workflow_entrypoint \
+            tests.test_reviewed_skip_state \
+            tests.test_terminal_report_skipped \
+            tests.test_reviewed_state \
+            tests.test_terminal_report_action \
+            -v 2>&1 | tee focused-test.log
+          focused_status=${PIPESTATUS[0]}
+          if [ "$focused_status" -ne 0 ]; then
+            exit "$focused_status"
+          fi
+          python -m unittest discover -s tests -v 2>&1 | tee regression-test.log
+      - name: Publish failure details
+        if: steps.tests.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '### Temporary T12 verification failure'
+            echo
+            echo '```text'
+            if [ -f focused-test.log ]; then tail -n 160 focused-test.log; fi
+            if [ -f regression-test.log ]; then tail -n 160 regression-test.log; fi
+            echo '```'
+          } > verification-failure.md
+          gh pr comment 13 --body-file verification-failure.md
+      - name: Publish verification status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" = "success" ]; then
+            state=success
+            description='T12 focused and regression verification passed'
+          else
+            state=failure
+            description='T12 focused or regression verification failed'
+          fi
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            -f state="$state" \
+            -f context=temporary-pr-verification \
+            -f description="$description" \
+            -f target_url="$run_url"
+          test "$state" = success
