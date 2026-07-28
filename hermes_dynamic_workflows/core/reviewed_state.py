@@ -22,12 +22,13 @@ TASK_STATUSES = frozenset(
         "REPAIRING",
         "INTEGRATED",
         "FAILED",
+        "SKIPPED",
     }
 )
-TERMINAL_TASK_STATUSES = frozenset({"INTEGRATED", "FAILED", "BLOCKED"})
+TERMINAL_TASK_STATUSES = frozenset({"INTEGRATED", "FAILED", "BLOCKED", "SKIPPED"})
 
 _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
-    "PLANNED": frozenset({"EXECUTING"}),
+    "PLANNED": frozenset({"EXECUTING", "SKIPPED"}),
     "EXECUTING": frozenset({"REVIEWING"}),
     "REVIEWING": frozenset({"PASS", "FAIL", "BLOCKED"}),
     "PASS": frozenset({"INTEGRATED"}),
@@ -36,6 +37,7 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "BLOCKED": frozenset(),
     "INTEGRATED": frozenset(),
     "FAILED": frozenset(),
+    "SKIPPED": frozenset(),
 }
 
 
@@ -51,6 +53,7 @@ class ReviewedTaskState:
     review_verdicts: list[dict[str, Any]] = field(default_factory=list)
     repair_attempts: list[dict[str, Any]] = field(default_factory=list)
     integration: dict[str, Any] | None = None
+    skip_reason: str | None = None
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -64,6 +67,7 @@ class ReviewedTaskState:
             "review_verdicts": deepcopy(self.review_verdicts),
             "repair_attempts": deepcopy(self.repair_attempts),
             "integration": deepcopy(self.integration),
+            "skip_reason": self.skip_reason,
         }
 
 
@@ -193,6 +197,28 @@ class ReviewedWorkflowState:
                     f"task {task.task_id} dependencies are not integrated: {', '.join(blocked)}"
                 )
             self._transition(task, "EXECUTING")
+
+    def skip_task(self, task_id: str, reason: str) -> None:
+        clean_reason = str(reason or "").strip()
+        if not clean_reason:
+            raise ReviewedStateError("skipped task reason must be a non-empty string")
+        with self._lock:
+            task = self._task(task_id)
+            if task.status != "PLANNED":
+                self._illegal_transition(task, "SKIPPED")
+            terminal_dependencies = [
+                dependency
+                for dependency in task.depends_on
+                if dependency in self.tasks
+                and self.tasks[dependency].status in TERMINAL_TASK_STATUSES
+                and self.tasks[dependency].status != "INTEGRATED"
+            ]
+            if not terminal_dependencies:
+                raise ReviewedStateError(
+                    f"task {task.task_id} cannot be skipped without a terminal non-integrated dependency"
+                )
+            task.skip_reason = clean_reason
+            self._transition(task, "SKIPPED")
 
     def submit_worker_result(self, task_id: str, result: dict[str, Any]) -> None:
         result_value = _require_mapping(result, "worker result")
