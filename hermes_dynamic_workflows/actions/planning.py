@@ -1,11 +1,11 @@
-"""Initial planning action for the canonical reviewed workflow."""
+"""Planning actions for the canonical reviewed workflow."""
 
 from __future__ import annotations
 
 import json
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable
 
 from ..contracts.packages import PLAN_PACKAGE_SCHEMA
 from ..core.errors import ReviewedStateError
@@ -35,11 +35,13 @@ class PlanningLimits:
 
 
 class InitialPlanningAction:
-    """Ask one initial orchestrator for a bounded plan and register it.
+    """Create, validate, and register bounded reviewed-workflow plans.
 
-    This action owns planning policy and state mutation. It deliberately reuses
-    ``WorkflowAPI.agent`` for execution, model routing, structured output,
-    approvals, telemetry, cache, timeout, and token accounting.
+    Initial planning and later delta replanning share the same schema, semantic
+    checks, state registration, journal path, and action-owned caps. Child
+    execution still goes through ``WorkflowAPI.agent`` so model routing,
+    approvals, telemetry, structured output, cache, timeouts, and accounting
+    remain canonical.
     """
 
     def __init__(self, limits: PlanningLimits | None = None):
@@ -52,42 +54,93 @@ class InitialPlanningAction:
         original_objective: str,
         cycle: int = 0,
     ) -> dict[str, Any]:
-        objective = str(original_objective or "").strip()
-        if not objective:
-            raise ReviewedStateError("original objective must be a non-empty string")
-        if isinstance(cycle, bool) or not isinstance(cycle, int) or cycle < 0:
-            raise ReviewedStateError("planning cycle must be a non-negative integer")
-
-        prompt = self._prompt(objective=objective, cycle=cycle)
+        objective, clean_cycle = _normalize_request(original_objective, cycle)
+        prompt = self._prompt(objective=objective, cycle=clean_cycle)
         plan = await api.agent(
             prompt,
             {
-                "label": f"initial-orchestrator:cycle-{cycle}",
+                "label": f"initial-orchestrator:cycle-{clean_cycle}",
                 "phase": "Planning",
                 "schema": PLAN_PACKAGE_SCHEMA,
                 "agentType": "initial-orchestrator",
                 "isolation": "shared",
             },
         )
+        return self.register_plan(
+            api,
+            plan,
+            original_objective=objective,
+            cycle=clean_cycle,
+            source_label="initial orchestrator",
+            plan_label="initial plan",
+        )
+
+    def validate_plan(
+        self,
+        plan: Any,
+        *,
+        original_objective: str,
+        cycle: int,
+        source_label: str,
+        plan_label: str,
+        allowed_existing_dependencies: Iterable[str] = (),
+    ) -> dict[str, Any]:
+        """Validate one complete PlanPackage without mutating workflow state."""
+
+        objective, clean_cycle = _normalize_request(original_objective, cycle)
         try:
             validate_schema(plan, PLAN_PACKAGE_SCHEMA)
         except Exception as exc:
-            raise ReviewedStateError(f"initial orchestrator returned an invalid PlanPackage: {exc}") from exc
+            raise ReviewedStateError(
+                f"{source_label} returned an invalid PlanPackage: {exc}"
+            ) from exc
         if not isinstance(plan, dict):
-            raise ReviewedStateError("initial orchestrator returned a non-object PlanPackage")
+            raise ReviewedStateError(f"{source_label} returned a non-object PlanPackage")
 
-        self._validate_semantics(plan, objective=objective, cycle=cycle)
-        api.context.state.reviewed.register_plan(plan)
-        api.context.journal(
-            {
-                "type": "reviewed_plan_registered",
-                "planId": plan["plan_id"],
-                "cycle": cycle,
-                "taskIds": [task["task_id"] for task in plan["tasks"]],
-            }
+        self._validate_semantics(
+            plan,
+            objective=objective,
+            cycle=clean_cycle,
+            plan_label=plan_label,
+            allowed_existing_dependencies=allowed_existing_dependencies,
         )
-        api.context.notify()
         return deepcopy(plan)
+
+    def register_plan(
+        self,
+        api: Any,
+        plan: Any,
+        *,
+        original_objective: str,
+        cycle: int,
+        source_label: str = "planner",
+        plan_label: str = "plan",
+        allowed_existing_dependencies: Iterable[str] = (),
+        event_type: str = "reviewed_plan_registered",
+        source_plan_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate and register a complete plan through the canonical state path."""
+
+        validated = self.validate_plan(
+            plan,
+            original_objective=original_objective,
+            cycle=cycle,
+            source_label=source_label,
+            plan_label=plan_label,
+            allowed_existing_dependencies=allowed_existing_dependencies,
+        )
+        api.context.state.reviewed.register_plan(validated)
+        event = {
+            "type": event_type,
+            "planId": validated["plan_id"],
+            "cycle": cycle,
+            "taskIds": [task["task_id"] for task in validated["tasks"]],
+        }
+        if source_plan_id:
+            event["sourcePlanId"] = source_plan_id
+        api.context.journal(event)
+        api.context.notify()
+        return deepcopy(validated)
 
     def _prompt(self, *, objective: str, cycle: int) -> str:
         limits = self.limits
@@ -114,20 +167,24 @@ class InitialPlanningAction:
         *,
         objective: str,
         cycle: int,
+        plan_label: str,
+        allowed_existing_dependencies: Iterable[str],
     ) -> None:
         if plan.get("cycle") != cycle:
             raise ReviewedStateError(
-                f"initial plan cycle mismatch: expected {cycle}, got {plan.get('cycle')!r}"
+                f"{plan_label} cycle mismatch: expected {cycle}, got {plan.get('cycle')!r}"
             )
         if plan.get("original_objective") != objective:
-            raise ReviewedStateError("initial plan must preserve original_objective exactly")
+            raise ReviewedStateError(
+                f"{plan_label} must preserve original_objective exactly"
+            )
 
         tasks = plan.get("tasks")
         if not isinstance(tasks, list) or not tasks:
-            raise ReviewedStateError("initial plan must contain at least one task")
+            raise ReviewedStateError(f"{plan_label} must contain at least one task")
         if len(tasks) > self.limits.max_tasks:
             raise ReviewedStateError(
-                f"initial plan exceeds task cap ({len(tasks)} > {self.limits.max_tasks})"
+                f"{plan_label} exceeds task cap ({len(tasks)} > {self.limits.max_tasks})"
             )
 
         repairs = plan.get("max_repairs_per_task")
@@ -138,25 +195,30 @@ class InitialPlanningAction:
             raise ReviewedStateError("max_replanning_cycles must be an integer")
         if repairs > self.limits.max_repairs_per_task:
             raise ReviewedStateError(
-                "initial plan exceeds max_repairs_per_task cap "
+                f"{plan_label} exceeds max_repairs_per_task cap "
                 f"({repairs} > {self.limits.max_repairs_per_task})"
             )
         if replans > self.limits.max_replanning_cycles:
             raise ReviewedStateError(
-                "initial plan exceeds max_replanning_cycles cap "
+                f"{plan_label} exceeds max_replanning_cycles cap "
                 f"({replans} > {self.limits.max_replanning_cycles})"
             )
 
         plan_id = str(plan.get("plan_id") or "").strip()
-        seen: set[str] = set()
+        new_task_ids: set[str] = set()
+        available_dependencies = {
+            str(item).strip()
+            for item in allowed_existing_dependencies
+            if str(item).strip()
+        }
         for index, task in enumerate(tasks):
             if not isinstance(task, dict):
                 raise ReviewedStateError(f"tasks[{index}] must be an object")
             task_id = str(task.get("task_id") or "").strip()
             if not task_id:
                 raise ReviewedStateError(f"tasks[{index}].task_id must be non-empty")
-            if task_id in seen:
-                raise ReviewedStateError(f"duplicate task_id in initial plan: {task_id}")
+            if task_id in new_task_ids:
+                raise ReviewedStateError(f"duplicate task_id in {plan_label}: {task_id}")
             if task.get("plan_id") != plan_id:
                 raise ReviewedStateError(
                     f"task {task_id} plan_id does not match plan {plan_id}"
@@ -169,12 +231,27 @@ class InitialPlanningAction:
                 raise ReviewedStateError(
                     f"task {task_id} repeats dependency {duplicates[0]}"
                 )
-            unavailable = [dependency for dependency in depends_on if dependency not in seen]
+            unavailable = [
+                dependency
+                for dependency in depends_on
+                if dependency not in available_dependencies
+            ]
             if unavailable:
                 raise ReviewedStateError(
-                    f"task {task_id} dependency must appear earlier: {unavailable[0]}"
+                    f"task {task_id} dependency must be integrated or appear earlier: "
+                    f"{unavailable[0]}"
                 )
-            seen.add(task_id)
+            new_task_ids.add(task_id)
+            available_dependencies.add(task_id)
+
+
+def _normalize_request(original_objective: str, cycle: int) -> tuple[str, int]:
+    objective = str(original_objective or "").strip()
+    if not objective:
+        raise ReviewedStateError("original objective must be a non-empty string")
+    if isinstance(cycle, bool) or not isinstance(cycle, int) or cycle < 0:
+        raise ReviewedStateError("planning cycle must be a non-negative integer")
+    return objective, cycle
 
 
 def _duplicates(values: list[Any]) -> list[Any]:
