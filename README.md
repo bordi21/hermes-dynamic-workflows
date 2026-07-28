@@ -4,11 +4,15 @@
 
 English | [简体中文](./README.zh-CN.md) | [日本語](./README.ja-JP.md)
 
-You can now use **Dynamic Workflows** in Hermes: have the model write a sandboxed Python
-script on the fly, execute it in the background runtime, and orchestrate large numbers
-of independent subagents with `agent()/parallel()/pipeline()` — ideal for codebase
-audits, large-scale migrations, and cross-validated research. Inspired by
-[Dynamic Workflows in Claude Code](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code).
+Dynamic Workflows supports two complementary modes in Hermes:
+
+- sandboxed Python workflows written on demand with `agent()/parallel()/pipeline()` for
+  custom fan-out, pipelines, audits, migrations, and research;
+- the packaged **`reviewed-workflow`** for one bounded planner → worker → reviewer →
+  repair → integration → final-validation lifecycle with deterministic evidence-backed
+  reporting.
+
+Inspired by [Dynamic Workflows in Claude Code](https://claude.com/blog/introducing-dynamic-workflows-in-claude-code).
 
 https://github.com/user-attachments/assets/06ef3d0d-4d89-48c4-9851-e1cae690e9b0
 
@@ -17,12 +21,55 @@ https://github.com/user-attachments/assets/06ef3d0d-4d89-48c4-9851-e1cae690e9b0
 Install and enable in one line:
 
 ```bash
-hermes plugins install lingjiuu/hermes-dynamic-workflows --enable
+hermes plugins install bordi21/hermes-dynamic-workflows --enable
 ```
 
 > Gateway users: run `hermes gateway restart` after installing.
 
-Once it's installed, just tell Hermes "run a workflow that …" and you're set.
+Once installed, tell Hermes to run a custom workflow, or launch the canonical reviewed
+workflow by name.
+
+### Canonical reviewed workflow
+
+Use the named workflow for a substantial objective that should be decomposed, executed by
+scoped workers, independently reviewed, repaired within limits, integrated only after
+PASS, and finally validated against the original objective:
+
+```json
+{
+  "name": "reviewed-workflow",
+  "args": {
+    "objective": "Implement the requested change and prove it works."
+  }
+}
+```
+
+The same objective can be passed as a non-empty string or as
+`{"original_objective": "..."}`. Extra fields and ambiguous objective shapes are
+rejected.
+
+The lifecycle is:
+
+1. one Initial Orchestrator creates a bounded ordered `PlanPackage`;
+2. each dependency-ready task receives one isolated task worktree and one fresh worker;
+3. a separate read-only reviewer returns evidence-backed `PASS`, `FAIL`, or `BLOCKED`;
+4. `FAIL` may launch bounded fresh repair sessions in the retained task workspace;
+5. only `PASS` reaches transactional integration;
+6. the Final Orchestrator validates the integrated state against the original objective;
+7. `NOT_APPROVED` may register one bounded delta plan while cycles remain;
+8. a deterministic `FinalReportPackage` exposes every task, gap, blocker, skipped
+   dependency, exhausted limit, and persisted evidence.
+
+A task that cannot run because a required dependency ended `FAILED`, `BLOCKED`, or
+`SKIPPED` becomes an explicit zero-attempt `SKIPPED` task. Integration conflicts and
+incomplete cycles stop fail-closed rather than being reported as success.
+
+### Verification status
+
+The complete named lifecycle is repository-verified with focused and full regression
+tests. Installation-specific behavior—provider routing, approvals, notifications,
+persistence, control commands, resume semantics, and crash recovery—must still be
+verified in the target Hermes environment before being treated as live proof.
 
 ### Live Dashboard (optional, requires a separate step)
 
@@ -112,6 +159,9 @@ return await agent("Synthesize the verified findings:\n" + json.dumps(findings))
 - `pipeline` (default, no barrier) / `parallel` (with barrier) handle concurrency;
   `phase`/`log` report progress; `workflow()` runs a named workflow inline; `args` /
   `budget` access the input arguments and the token budget.
+- `reviewed_workflow(request)` is the narrow lifecycle primitive used by the packaged
+  `reviewed-workflow` script. Custom scripts should normally launch that workflow by name
+  instead of reproducing its orchestration logic.
 
 ### Agent Type
 
@@ -164,12 +214,14 @@ completion — no polling required. Use `/workflows` to view history and details
 
 ## Deep Dive
 
-The target planner → worker → reviewer → repair → final-validation behavior and all
-structured handoff invariants are defined in the [Canonical Orchestration Workflow](./WORKFLOW_CONTRACT.md).
+The planner → worker → reviewer → repair → integration → final-validation → bounded
+replanning contract and all structured handoff invariants are defined in the
+[Canonical Orchestration Workflow](./WORKFLOW_CONTRACT.md).
 
-For implementation details (core execution path, tools and full call results, prompt
-cache, concurrency and limits, permission governance, rebuilding transcripts from
-`state.db`, sandboxing, resume…), see [TECHNICAL.md](./TECHNICAL.md).
+For implementation details (the named entrypoint, lifecycle Actions, reviewed state,
+core execution path, tools and full call results, prompt cache, concurrency and limits,
+permission governance, transcripts, sandboxing, controls, and resume), see
+[TECHNICAL.md](./TECHNICAL.md).
 
 ## License
 
