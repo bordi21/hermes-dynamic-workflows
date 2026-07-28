@@ -106,8 +106,10 @@ class ReviewedWorkflowEntrypointTests(unittest.TestCase):
 
         for invalid in (
             None,
+            42,
             "   ",
             {},
+            {"objective": 42},
             {"objective": OBJECTIVE, "extra": True},
             {"objective": OBJECTIVE, "original_objective": OBJECTIVE},
         ):
