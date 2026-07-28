@@ -17,11 +17,17 @@ A request received by one Hermes profile is transformed into a bounded, review-d
 7. failed final validation triggers bounded replanning and another execution cycle;
 8. the run ends with one evidence-backed report.
 
-## Identity and model routing
+## Identity, inherited profile context, and model routing
 
 The workflow is launched from a **single Hermes profile**: the profile that received the user's request.
 
-All planner, worker, reviewer, repair, and final-validator roles are ephemeral Hermes `AIAgent` instances launched by that same profile. They are not separate durable Hermes profiles.
+All planner, worker, reviewer, repair, and final-validator roles are ephemeral Hermes `AIAgent` instances launched under that same profile. They are not separate durable Hermes profiles.
+
+Because they are instances of the same Hermes profile, every role receives the profile's normal agent-level context and capabilities, including its SOUL, memory system and retrieval behavior, project-level instructions, configured skills and tools, and approval environment, subject to the normal Hermes runtime and profile configuration.
+
+Profile inheritance is distinct from parent-session inheritance. A child does not need a blind copy of the complete parent conversation transcript or unrelated run history. The current objective, task-specific context, prior results, constraints, and evidence required for the role are passed through explicit structured packets. Any parent-session detail required for correctness must be included deliberately in those packets.
+
+Role instructions supplied through `agentType` or the workflow packet augment and specialize the inherited profile identity. They must not silently erase or replace the profile's normal SOUL and memory unless an explicit, documented configuration requests that behavior.
 
 Each role may use a separately configured model:
 
@@ -32,8 +38,6 @@ Each role may use a separately configured model:
 - `final_orchestrator_model`
 
 A role may inherit the launching session's model, use an `agentType` default, or receive an explicit model override. Provider-specific model names must never be hardcoded into orchestration logic.
-
-Child instances do **not** inherit the parent's conversation, SOUL, memory, or unrelated project instructions. Each child receives only a scoped, structured packet plus the stable role instructions required for its job.
 
 ## Canonical flow
 
@@ -72,7 +76,7 @@ flowchart TD
 
 ## Planning contract
 
-The Initial Orchestrator receives the original request, the relevant project context, constraints, allowed mutations, and available evidence.
+The Initial Orchestrator receives the original request, the inherited Hermes profile context, the relevant project context, constraints, allowed mutations, and available evidence.
 
 It must produce a structured `PlanPackage` containing:
 
@@ -253,22 +257,24 @@ workflow_timeout_seconds: 900
 child_timeout_seconds: 300
 ```
 
-These are illustrative defaults, not hardcoded constants. Existing Hermes configuration, approvals, runtime controls, persistence, telemetry, transcripts, accounting, resume behavior, and worktree support remain authoritative and must be reused.
+These are illustrative defaults, not hardcoded constants. Existing Hermes configuration, approvals, runtime controls, persistence, telemetry, transcripts, accounting, resume behavior, memory behavior, SOUL loading, and worktree support remain authoritative and must be reused.
 
 ## Non-negotiable invariants
 
 1. One launching Hermes profile owns the complete run.
-2. Every role is an ephemeral `AIAgent` instance of that workflow, not another durable profile.
-3. Every role can use a different configurable model.
-4. Every inter-agent handoff is structured and schema-validated.
-5. The planner provides both worker instructions and reviewer guidelines.
-6. Every task receives an evidence-backed `PASS`, `FAIL`, or `BLOCKED` review.
-7. Repairs and full replanning cycles are bounded and configurable.
-8. Only accepted results are integrated.
-9. Final validation checks the integrated project against the original request.
-10. The user receives one honest, evidence-backed terminal report.
-11. Existing Hermes approval governance is never bypassed.
-12. Existing run state, journal, transcripts, notifications, dashboard, resume cache, and controls are extended rather than replaced.
+2. Every role is an ephemeral `AIAgent` instance launched under that profile, not another durable profile.
+3. Every role inherits the launching profile's normal SOUL, memory system, project-level context, skills, tools, and approval environment.
+4. Role-specific instructions augment the inherited profile identity instead of silently replacing it.
+5. The complete parent conversation is not copied blindly; task-specific run context is transferred through structured, schema-validated packets.
+6. Every role can use a different configurable model.
+7. The planner provides both worker instructions and reviewer guidelines.
+8. Every task receives an evidence-backed `PASS`, `FAIL`, or `BLOCKED` review.
+9. Repairs and full replanning cycles are bounded and configurable.
+10. Only accepted results are integrated.
+11. Final validation checks the integrated project against the original request.
+12. The user receives one honest, evidence-backed terminal report.
+13. Existing Hermes approval governance is never bypassed.
+14. Existing run state, journal, transcripts, notifications, dashboard, resume cache, and controls are extended rather than replaced.
 
 ## Refactor rule
 
