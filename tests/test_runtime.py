@@ -636,7 +636,7 @@ return await workflow("missing-child")
                 )
 
         self.assertIn(
-            "workflow('missing-child'): no workflow with that name. Available: none",
+            "workflow('missing-child'): no workflow with that name. Available: reviewed-workflow",
             str(ctx.exception),
         )
 
