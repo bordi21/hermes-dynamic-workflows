@@ -1,10 +1,6 @@
 name: T08 Verification
 
 on:
-  pull_request:
-    branches:
-      - master
-      - feat/t08-reviewed-task-lifecycle
   push:
     branches:
       - feat/t08-reviewed-task-lifecycle
