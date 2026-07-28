@@ -101,6 +101,7 @@ def build_terminal_report(snapshot: dict[str, Any]) -> dict[str, Any]:
     integrated = sum(1 for task in tasks if task.get("status") == "INTEGRATED")
     failed = sum(1 for task in tasks if task.get("status") == "FAILED")
     blocked = sum(1 for task in tasks if task.get("status") == "BLOCKED")
+    skipped = sum(1 for task in tasks if task.get("status") == "SKIPPED")
     summary = _report_summary(
         outcome=outcome,
         cycle_count=len(ordered_cycles),
@@ -108,6 +109,7 @@ def build_terminal_report(snapshot: dict[str, Any]) -> dict[str, Any]:
         integrated=integrated,
         failed=failed,
         blocked=blocked,
+        skipped=skipped,
     )
     return {
         "schema_version": "1.0",
@@ -188,6 +190,7 @@ def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
         "INTEGRATED": "PASS",
         "FAILED": "FAIL",
         "BLOCKED": "BLOCKED",
+        "SKIPPED": "SKIPPED",
     }
     outcome = outcome_map.get(status)
     if outcome is None:
@@ -208,6 +211,9 @@ def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _task_summary_text(task: dict[str, Any], *, outcome: str) -> str:
+    if outcome == "SKIPPED":
+        reason = str(task.get("skip_reason") or "").strip()
+        return reason or "Task skipped because a required dependency was not integrated."
     if outcome == "PASS":
         integration = task.get("integration")
         if isinstance(integration, dict):
@@ -253,6 +259,10 @@ def _collect_unresolved(
                 f"Task {task_id} blocked: {blocker or _task_summary_text(task, outcome='BLOCKED')}"
             )
             unresolved.extend(_review_feedback(task, prefix=f"Task {task_id} feedback"))
+        elif status == "SKIPPED":
+            unresolved.append(
+                f"Task {task_id} skipped: {_task_summary_text(task, outcome='SKIPPED')}"
+            )
 
     if outcome == "PARTIAL":
         unresolved.append("Replanning limit exhausted before the original objective was approved.")
@@ -347,8 +357,10 @@ def _report_summary(
     integrated: int,
     failed: int,
     blocked: int,
+    skipped: int,
 ) -> str:
     return (
         f"Reviewed workflow ended {outcome} after {cycle_count} planning cycle(s): "
-        f"{integrated}/{task_count} task(s) integrated, {failed} failed, {blocked} blocked."
+        f"{integrated}/{task_count} task(s) integrated, {failed} failed, "
+        f"{blocked} blocked, {skipped} skipped."
     )
