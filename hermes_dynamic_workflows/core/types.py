@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from time import monotonic
 from typing import Any, Callable, Literal
 
+from .reviewed_state import ReviewedWorkflowState
+
 AgentStatus = Literal["queued", "running", "done", "error", "skipped"]
 
 
@@ -138,9 +140,11 @@ class WorkflowFrame:
 @dataclass
 class WorkflowState:
     root: WorkflowFrame
+    reviewed: ReviewedWorkflowState = field(default_factory=ReviewedWorkflowState)
 
     def snapshot(self) -> dict[str, Any]:
         snapshot = self.root.snapshot()
+        snapshot["reviewed"] = self.reviewed.snapshot()
         snapshot["totals"] = workflow_totals(snapshot)
         return snapshot
 
