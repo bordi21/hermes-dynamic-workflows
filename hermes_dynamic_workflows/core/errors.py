@@ -32,6 +32,10 @@ class WorkflowRuntimeError(DynamicWorkflowError):
     """Raised when workflow execution fails (API misuse, bad return, etc.)."""
 
 
+class ReviewedStateError(WorkflowRuntimeError):
+    """Raised when reviewed-workflow lineage or a domain transition is invalid."""
+
+
 class ChildAgentError(WorkflowRuntimeError):
     """Raised when a child agent fails."""
 
