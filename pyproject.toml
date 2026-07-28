@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "Claude-Code-style dynamic workflows for Hermes Agent"
 requires-python = ">=3.11"
 dependencies = [
-    "jsonschema>=4,<5",
-    "wcwidth>=0.2,<1",
-    "windows-curses>=2.4; platform_system == 'Windows'",
+  "jsonschema>=4,<5",
+  "wcwidth>=0.2,<1",
+  "windows-curses>=2.4; platform_system == 'Windows'",
 ]
 
 [project.scripts]
@@ -16,7 +16,7 @@ hermes-workflows = "hermes_dynamic_workflows.tui.app:main"
 dynamic-workflows = "hermes_dynamic_workflows.entry"
 
 [tool.setuptools.package-data]
-hermes_dynamic_workflows = ["agents/*.md"]
+hermes_dynamic_workflows = ["agents/*.md", "workflows/*.py"]
 
 [tool.unittest]
 start-dir = "tests"
