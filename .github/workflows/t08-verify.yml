@@ -2,9 +2,12 @@ name: T08 Verification
 
 on:
   pull_request:
-    branches: [master]
+    branches:
+      - master
+      - feat/t08-reviewed-task-lifecycle
   push:
-    branches: [feat/t08-reviewed-task-lifecycle]
+    branches:
+      - feat/t08-reviewed-task-lifecycle
 
 permissions:
   contents: read
@@ -25,5 +28,3 @@ jobs:
         run: python -m unittest tests.test_reviewed_task_execution -v
       - name: Run complete regression suite
         run: python -m unittest discover -s tests -v
-      - name: Record verification completion
-        run: echo "T08 verification completed"
