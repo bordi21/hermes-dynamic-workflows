@@ -136,6 +136,9 @@ completion — no polling required. Use `/workflows` to view history and details
 
 ## Deep Dive
 
+The target planner → worker → reviewer → repair → final-validation behavior and all
+structured handoff invariants are defined in the [Canonical Orchestration Workflow](./WORKFLOW_CONTRACT.md).
+
 For implementation details (core execution path, tools and full call results, prompt
 cache, concurrency and limits, permission governance, rebuilding transcripts from
 `state.db`, sandboxing, resume…), see [TECHNICAL.md](./TECHNICAL.md).
