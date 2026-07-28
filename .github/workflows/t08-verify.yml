@@ -25,3 +25,5 @@ jobs:
         run: python -m unittest tests.test_reviewed_task_execution -v
       - name: Run complete regression suite
         run: python -m unittest discover -s tests -v
+      - name: Record verification completion
+        run: echo "T08 verification completed"
