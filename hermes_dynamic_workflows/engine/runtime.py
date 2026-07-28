@@ -14,7 +14,7 @@ from typing import Any, Callable
 from .api import WorkflowAPI
 from .cache import ResumeCache
 from ..core.config import PluginConfig, load_config
-from ..core.errors import ChildAgentError
+from ..core.errors import ChildAgentError, WorkflowRuntimeError
 from .context import PauseGate, WorkflowExecutionContext
 from .sandbox import (
     ENTRYPOINT_NAME,
@@ -175,7 +175,7 @@ async def _run_workflow_async(script: str, options: WorkflowOptions | None = Non
         frame.status = "completed"
         return WorkflowResult(value=value, state=state)
     except BaseException as exc:
-        # BaseException so a WorkflowHalt (stop/deadline/limit) still records
+        # BaseException so a WorkflowHalt (stop / deadline / limit) still records
         # frame status before propagating to the run thread.
         frame.status = "stopped" if context.stop_event.is_set() else "error"
         if not isinstance(exc, ChildAgentError):
@@ -187,6 +187,15 @@ async def _run_workflow_async(script: str, options: WorkflowOptions | None = Non
 
 
 def _build_namespace(api: WorkflowAPI) -> dict[str, Any]:
+    async def reviewed_workflow(request: Any) -> dict[str, Any]:
+        from ..actions.workflow import ReviewedWorkflowAction
+
+        objective = _normalize_reviewed_workflow_request(request)
+        return await ReviewedWorkflowAction().run(
+            api,
+            original_objective=objective,
+        )
+
     namespace = {
         "__builtins__": SAFE_BUILTINS,
         "json": json,
@@ -194,8 +203,32 @@ def _build_namespace(api: WorkflowAPI) -> dict[str, Any]:
         "True": True,
         "False": False,
         "None": None,
+        "reviewed_workflow": reviewed_workflow,
     }
     namespace.update(api.globals())
     # Per-iteration guard injected into every `while` test by the sandbox.
     namespace[LOOP_GUARD_NAME] = api.context.tick_loop
     return namespace
+
+
+def _normalize_reviewed_workflow_request(request: Any) -> str:
+    if isinstance(request, str):
+        objective = request.strip()
+    elif isinstance(request, dict):
+        keys = set(request)
+        if keys == {"objective"}:
+            objective = str(request.get("objective") or "").strip()
+        elif keys == {"original_objective"}:
+            objective = str(request.get("original_objective") or "").strip()
+        else:
+            raise WorkflowRuntimeError(
+                "reviewed_workflow() expects {'objective': '<text>'} or "
+                "{'original_objective': '<text>'}"
+            )
+    else:
+        raise WorkflowRuntimeError(
+            "reviewed_workflow() expects a non-empty objective string or one objective object"
+        )
+    if not objective:
+        raise WorkflowRuntimeError("reviewed_workflow() objective must be a non-empty string")
+    return objective
