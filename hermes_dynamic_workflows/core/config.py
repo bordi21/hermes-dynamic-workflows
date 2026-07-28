@@ -38,6 +38,22 @@ class PluginConfig:
     # session model, override only when a stage wants a different tier. Provider
     # selection stays in Hermes' runtime/model configuration.
     allow_model_override: bool = True
+
+    # Logical reviewed-workflow role routing. `inherit` means the role does not
+    # force a model and falls through to the configured agentType model, then the
+    # launching Hermes session model. The matching `*_agent_type` value selects
+    # the preset used when workflow code requests the canonical logical role.
+    initial_orchestrator_model: str = "inherit"
+    worker_model: str = "inherit"
+    reviewer_model: str = "inherit"
+    repair_worker_model: str = "inherit"
+    final_orchestrator_model: str = "inherit"
+    initial_orchestrator_agent_type: str = "initial-orchestrator"
+    worker_agent_type: str = "worker"
+    reviewer_agent_type: str = "reviewer"
+    repair_worker_agent_type: str = "repair-worker"
+    final_orchestrator_agent_type: str = "final-orchestrator"
+
     keep_worktrees: bool = False
     # Ask the user to approve before a top-level workflow launches (CC gates
     # every launch — a run can spawn many agents and spend real tokens). On by
@@ -112,6 +128,11 @@ def _as_str_tuple(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
         return default
     cleaned = tuple(item for item in items if item)
     return cleaned or default
+
+
+def _as_nonempty_str(value: Any, default: str) -> str:
+    clean = str(value or "").strip()
+    return clean or default
 
 
 def _as_mode(value: Any, default: str, allowed: set[str]) -> str:
@@ -192,6 +213,70 @@ def load_config() -> PluginConfig:
         allow_model_override=_as_bool(
             os.getenv("HERMES_DYNAMIC_WORKFLOWS_ALLOW_MODEL_OVERRIDE", raw.get("allow_model_override")),
             default.allow_model_override,
+        ),
+        initial_orchestrator_model=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_INITIAL_ORCHESTRATOR_MODEL",
+                raw.get("initial_orchestrator_model"),
+            ),
+            default.initial_orchestrator_model,
+        ),
+        worker_model=_as_nonempty_str(
+            os.getenv("HERMES_DYNAMIC_WORKFLOWS_WORKER_MODEL", raw.get("worker_model")),
+            default.worker_model,
+        ),
+        reviewer_model=_as_nonempty_str(
+            os.getenv("HERMES_DYNAMIC_WORKFLOWS_REVIEWER_MODEL", raw.get("reviewer_model")),
+            default.reviewer_model,
+        ),
+        repair_worker_model=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_REPAIR_WORKER_MODEL",
+                raw.get("repair_worker_model"),
+            ),
+            default.repair_worker_model,
+        ),
+        final_orchestrator_model=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_FINAL_ORCHESTRATOR_MODEL",
+                raw.get("final_orchestrator_model"),
+            ),
+            default.final_orchestrator_model,
+        ),
+        initial_orchestrator_agent_type=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_INITIAL_ORCHESTRATOR_AGENT_TYPE",
+                raw.get("initial_orchestrator_agent_type"),
+            ),
+            default.initial_orchestrator_agent_type,
+        ),
+        worker_agent_type=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_WORKER_AGENT_TYPE",
+                raw.get("worker_agent_type"),
+            ),
+            default.worker_agent_type,
+        ),
+        reviewer_agent_type=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_REVIEWER_AGENT_TYPE",
+                raw.get("reviewer_agent_type"),
+            ),
+            default.reviewer_agent_type,
+        ),
+        repair_worker_agent_type=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_REPAIR_WORKER_AGENT_TYPE",
+                raw.get("repair_worker_agent_type"),
+            ),
+            default.repair_worker_agent_type,
+        ),
+        final_orchestrator_agent_type=_as_nonempty_str(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_FINAL_ORCHESTRATOR_AGENT_TYPE",
+                raw.get("final_orchestrator_agent_type"),
+            ),
+            default.final_orchestrator_agent_type,
         ),
         keep_worktrees=_as_bool(
             os.getenv("HERMES_DYNAMIC_WORKFLOWS_KEEP_WORKTREES", raw.get("keep_worktrees")),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -23,20 +23,50 @@ class AgentTypeSpec:
     isolation: str | None = None
 
 
+_ROLE_CONFIG_FIELDS = {
+    "initial-orchestrator": (
+        "initial_orchestrator_agent_type",
+        "initial_orchestrator_model",
+    ),
+    "worker": ("worker_agent_type", "worker_model"),
+    "reviewer": ("reviewer_agent_type", "reviewer_model"),
+    "repair-worker": ("repair_worker_agent_type", "repair_worker_model"),
+    "final-orchestrator": (
+        "final_orchestrator_agent_type",
+        "final_orchestrator_model",
+    ),
+}
+
+_ROLE_ALIASES = {
+    "initial_orchestrator": "initial-orchestrator",
+    "repair_worker": "repair-worker",
+    "final_orchestrator": "final-orchestrator",
+}
+
+
 def resolve_agent_type(name: str | None, *, cwd: str | None = None) -> AgentTypeSpec | None:
     clean = str(name or "").strip()
     if not clean:
         return None
 
-    path = _find_agent_type_file(clean, cwd=cwd)
-    if path is not None:
-        return _load_agent_type_file(clean, path)
+    canonical_role = _canonical_role(clean)
+    lookup_name = clean
+    role_model = ""
+    if canonical_role is not None:
+        from ..core.config import load_config
 
-    folded = clean.casefold()
-    for spec in list_agent_types(cwd=cwd):
-        if spec.name.casefold() == folded:
-            return spec
-    return None
+        config = load_config()
+        agent_type_field, model_field = _ROLE_CONFIG_FIELDS[canonical_role]
+        lookup_name = str(getattr(config, agent_type_field, canonical_role) or "").strip()
+        lookup_name = lookup_name or canonical_role
+        role_model = str(getattr(config, model_field, "inherit") or "").strip()
+
+    spec = _resolve_agent_type_spec(lookup_name, cwd=cwd)
+    if spec is None:
+        return None
+    if role_model and role_model.casefold() != "inherit":
+        spec = replace(spec, model=role_model)
+    return spec
 
 
 def list_agent_types(*, cwd: str | None = None) -> list[AgentTypeSpec]:
@@ -58,6 +88,24 @@ def list_agent_types(*, cwd: str | None = None) -> list[AgentTypeSpec]:
                 continue
             active.setdefault(spec.name, spec)
     return list(active.values())
+
+
+def _canonical_role(name: str) -> str | None:
+    folded = str(name or "").strip().casefold()
+    folded = _ROLE_ALIASES.get(folded, folded)
+    return folded if folded in _ROLE_CONFIG_FIELDS else None
+
+
+def _resolve_agent_type_spec(name: str, *, cwd: str | None) -> AgentTypeSpec | None:
+    path = _find_agent_type_file(name, cwd=cwd)
+    if path is not None:
+        return _load_agent_type_file(name, path)
+
+    folded = name.casefold()
+    for spec in list_agent_types(cwd=cwd):
+        if spec.name.casefold() == folded:
+            return spec
+    return None
 
 
 def _find_agent_type_file(name: str, *, cwd: str | None) -> Path | None:
@@ -183,7 +231,7 @@ def _read_yaml(path: Path) -> Any:
 def _read_yaml_text(text: str) -> Any:
     try:
         import yaml
-    except Exception as exc:
+    except Exception:
         return _read_simple_yaml_text(text)
     return yaml.safe_load(text) or {}
 
