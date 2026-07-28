@@ -203,9 +203,9 @@ def _build_namespace(api: WorkflowAPI) -> dict[str, Any]:
         "True": True,
         "False": False,
         "None": None,
-        "reviewed_workflow": reviewed_workflow,
     }
     namespace.update(api.globals())
+    namespace["reviewed_workflow"] = reviewed_workflow
     # Per-iteration guard injected into every `while` test by the sandbox.
     namespace[LOOP_GUARD_NAME] = api.context.tick_loop
     return namespace
@@ -217,14 +217,19 @@ def _normalize_reviewed_workflow_request(request: Any) -> str:
     elif isinstance(request, dict):
         keys = set(request)
         if keys == {"objective"}:
-            objective = str(request.get("objective") or "").strip()
+            raw_objective = request.get("objective")
         elif keys == {"original_objective"}:
-            objective = str(request.get("original_objective") or "").strip()
+            raw_objective = request.get("original_objective")
         else:
             raise WorkflowRuntimeError(
                 "reviewed_workflow() expects {'objective': '<text>'} or "
                 "{'original_objective': '<text>'}"
             )
+        if not isinstance(raw_objective, str):
+            raise WorkflowRuntimeError(
+                "reviewed_workflow() objective must be a string"
+            )
+        objective = raw_objective.strip()
     else:
         raise WorkflowRuntimeError(
             "reviewed_workflow() expects a non-empty objective string or one objective object"
