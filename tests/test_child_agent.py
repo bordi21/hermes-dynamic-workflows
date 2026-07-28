@@ -679,6 +679,9 @@ class ToolCallCountTests(unittest.TestCase):
         self.assertTrue(callable(seen_kwargs["tool_progress_callback"]))
         self.assertTrue(callable(seen_kwargs["thinking_callback"]))
         self.assertIsNone(seen_kwargs["thinking_callback"]("pondering..."))
+        self.assertFalse(seen_kwargs["skip_context_files"])
+        self.assertFalse(seen_kwargs["skip_memory"])
+        self.assertNotIn("memory", PluginConfig().blocked_child_toolsets)
 
     def test_tool_progress_callback_prints_one_started_line_on_tty(self):
         class TtyStringIO(io.StringIO):
