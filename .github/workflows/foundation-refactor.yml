@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - refactor/t00-t02-foundation
+  pull_request:
+    branches:
+      - master
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -13,9 +17,10 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out branch
+      - name: Check out implementation branch
         uses: actions/checkout@v4
         with:
+          ref: refactor/t00-t02-foundation
           fetch-depth: 2
 
       - name: Set up Python
