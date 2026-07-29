@@ -614,7 +614,11 @@ def build_child_system_prompt(
             ]
         )
     if structured_output:
-        lines.extend(["", build_tool_schema_instruction().strip()])
+        lines.extend([
+            "",
+            f"You have the '{STRUCTURED_OUTPUT_TOOL_NAME}' tool available directly in your tool list.",
+            build_tool_schema_instruction().strip(),
+        ])
     return "\n".join(lines)
 
 

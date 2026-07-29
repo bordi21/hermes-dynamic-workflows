@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import deepcopy
+import contextvars
 import threading
 from typing import Any, Callable, Iterable, Iterator
+
+_CURRENT_CHILD_TASK_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_CURRENT_CHILD_TASK_ID", default=""
+)
 
 from ..core.schema import validate_json_schema, validate_schema
 from ..core.tool_errors import tool_error
@@ -91,6 +96,10 @@ class _StructuredOutputBroker:
 
     def submit(self, task_id: str, value: Any) -> tuple[bool, str]:
         with self._lock:
+            if not task_id:
+                task_id = _CURRENT_CHILD_TASK_ID.get("")
+            if not task_id and len(self._expect) == 1:
+                task_id = next(iter(self._expect.keys()))
             schema = self._expect.get(task_id)
             attempts = self._attempts.get(task_id, 0) + 1
             self._attempts[task_id] = attempts
@@ -188,20 +197,24 @@ def register_expectation(
     schema: dict[str, Any],
     on_exhausted: Callable[[], Any] | None = None,
 ) -> None:
+    _CURRENT_CHILD_TASK_ID.set(task_id)
     _BROKER.register(task_id, schema, on_exhausted)
 
 
 def peek_result(task_id: str) -> tuple[bool, Any, int]:
-    return _BROKER.peek(task_id)
+    target = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
+    return _BROKER.peek(target)
 
 
 def clear_expectation(task_id: str) -> None:
-    _BROKER.clear(task_id)
+    target = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
+    _BROKER.clear(target)
 
 
 def structured_output_handler(args: Any, *, task_id: str | None = None, **_: Any) -> str:
     """Validate and capture a workflow child's final structured value."""
-    ok, error = _BROKER.submit(str(task_id or ""), args)
+    target_id = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
+    ok, error = _BROKER.submit(target_id, args)
     if ok:
         return STRUCTURED_OUTPUT_SUCCESS
     return tool_error(f"Output does not match required schema: {error}")
