@@ -615,8 +615,9 @@ Prove the repaired lifecycle on the repository branch, then prepare an exact ins
   - hook serialization and provider-specific tool behavior still require the deployment canaries;
   - non-Git mutation workspaces remain unsupported and fail clearly as documented;
   - exact crash recovery remains unclaimed until separately verified end to end.
-- Resulting commit:
-  - this implementation-and-plan commit; its exact SHA is recorded in branch history and the execution report because a commit cannot contain its own final SHA.
+- Resulting commits:
+  - primary validation commit: `eadd3da6db964f318beffdd5577d87065b5d366e`;
+  - deployment-handoff correction: this commit, whose exact branch-head SHA is recorded in the execution report because a commit cannot contain its own final SHA. The correction was required because the repository-wide `docs/` ignore rule prevented the new handoff file from being staged by the primary commit.
 
 ## 5. Per-step execution protocol
 
