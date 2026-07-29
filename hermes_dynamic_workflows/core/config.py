@@ -22,6 +22,11 @@ class PluginConfig:
     max_loop_iterations: int = 10_000_000
     workflow_timeout_seconds: float = 900.0
     child_timeout_seconds: float = 300.0
+    # Repeated equivalent observable child activity warns, then stops fail-closed.
+    # This is a per-signature circuit breaker, not a universal tool-call budget.
+    non_progress_detection_enabled: bool = True
+    non_progress_warning_repeats: int = 3
+    non_progress_stop_repeats: int = 5
     script_max_chars: int = 524288
     mcp_discovery_wait_seconds: float = 0.75
     default_child_toolsets: tuple[str, ...] = ("web", "file", "terminal", "skills")
@@ -190,6 +195,42 @@ def load_config() -> PluginConfig:
         child_timeout_seconds=_as_float(
             raw.get("child_timeout_seconds"),
             default.child_timeout_seconds,
+        ),
+        non_progress_detection_enabled=_as_bool(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_NON_PROGRESS_DETECTION_ENABLED",
+                raw.get("non_progress_detection_enabled"),
+            ),
+            default.non_progress_detection_enabled,
+        ),
+        non_progress_warning_repeats=_as_int(
+            os.getenv(
+                "HERMES_DYNAMIC_WORKFLOWS_NON_PROGRESS_WARNING_REPEATS",
+                raw.get("non_progress_warning_repeats"),
+            ),
+            default.non_progress_warning_repeats,
+            minimum=2,
+            maximum=100,
+        ),
+        non_progress_stop_repeats=max(
+            _as_int(
+                os.getenv(
+                    "HERMES_DYNAMIC_WORKFLOWS_NON_PROGRESS_STOP_REPEATS",
+                    raw.get("non_progress_stop_repeats"),
+                ),
+                default.non_progress_stop_repeats,
+                minimum=3,
+                maximum=200,
+            ),
+            _as_int(
+                os.getenv(
+                    "HERMES_DYNAMIC_WORKFLOWS_NON_PROGRESS_WARNING_REPEATS",
+                    raw.get("non_progress_warning_repeats"),
+                ),
+                default.non_progress_warning_repeats,
+                minimum=2,
+                maximum=100,
+            ) + 1,
         ),
         script_max_chars=_as_int(
             raw.get("script_max_chars"),

@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from dataclasses import replace
 from typing import Any
 
+from .non_progress import NonProgressCircuitBreaker, NonProgressIntervention
 from .presets import AgentTypeSpec, list_agent_types, resolve_agent_type
 from .worktree import WorkspaceLease, create_workspace_lease
 from ..core.config import PluginConfig
@@ -505,12 +506,33 @@ class HermesChildAgentRunner(ChildAgentRunner):
         timeout = self.config.child_timeout_seconds
         live_lock = threading.RLock()
         live_tool_calls = 0
+        non_progress = NonProgressCircuitBreaker(
+            enabled=self.config.non_progress_detection_enabled,
+            warning_repeats=self.config.non_progress_warning_repeats,
+            stop_repeats=self.config.non_progress_stop_repeats,
+        )
+        non_progress_events: list[dict[str, Any]] = []
+        non_progress_stop_reason = ""
 
-        def _emit_progress(event: dict[str, Any]) -> None:
+        def _record_non_progress(intervention: NonProgressIntervention) -> None:
+            nonlocal non_progress_stop_reason
+            payload = intervention.metadata()
+            non_progress_events.append(payload)
+            if intervention.level == "stop":
+                non_progress_stop_reason = intervention.message
+
+        def _emit_progress(event: dict[str, Any]) -> dict[str, str] | None:
             nonlocal live_tool_calls
+            intervention: NonProgressIntervention | None = None
             with live_lock:
                 if event.get("type") == "tool_call":
                     live_tool_calls += 1
+                    intervention = non_progress.observe_tool(
+                        str(event.get("tool_name") or "tool"),
+                        event.get("args") if isinstance(event.get("args"), dict) else {},
+                    )
+                    if intervention is not None:
+                        _record_non_progress(intervention)
                 metadata = _child_metadata(child, {}, lease, agent_type, toolsets)
                 metadata["tool_calls"] = max(
                     int(metadata.get("tool_calls") or 0),
@@ -520,7 +542,22 @@ class HermesChildAgentRunner(ChildAgentRunner):
                     metadata["activity"] = str(event["activity"])
                 if event.get("type") == "approval":
                     metadata["approval"] = dict(event)
+                if non_progress_events:
+                    metadata["non_progress"] = {
+                        "latest": dict(non_progress_events[-1]),
+                        "events": [dict(item) for item in non_progress_events],
+                    }
             _emit_request_update(request, metadata)
+            if intervention is None:
+                return None
+            if intervention.level == "stop":
+                interrupt = getattr(child, "interrupt", None)
+                if callable(interrupt):
+                    try:
+                        interrupt()
+                    except Exception:
+                        pass
+            return {"action": "block", "message": intervention.message}
 
         interactive_callback = self._approval_coordinator.callback_for(
             lease.task_id,
@@ -575,6 +612,7 @@ class HermesChildAgentRunner(ChildAgentRunner):
                     message = build_child_task_message(request, workspace=lease.cwd)
                     history = None
                     response_attempts = 0
+                    observed_invalid_attempts = 0
                     while True:
                         result = child.run_conversation(
                             user_message=message,
@@ -590,6 +628,24 @@ class HermesChildAgentRunner(ChildAgentRunner):
 
                         response_attempts += 1
                         last_error = peek_error(lease.task_id)
+                        structured_warning = ""
+                        if last_error and tool_attempts > observed_invalid_attempts:
+                            observed_invalid_attempts = tool_attempts
+                            intervention = non_progress.observe_invalid_submission(last_error)
+                            if intervention is not None:
+                                with live_lock:
+                                    _record_non_progress(intervention)
+                                    metadata = _child_metadata(
+                                        child, {}, lease, agent_type, toolsets
+                                    )
+                                    metadata["non_progress"] = {
+                                        "latest": dict(non_progress_events[-1]),
+                                        "events": [dict(item) for item in non_progress_events],
+                                    }
+                                _emit_request_update(request, metadata)
+                                if intervention.level == "stop":
+                                    raise ChildAgentError(intervention.message)
+                                structured_warning = intervention.message
                         if tool_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES:
                             raise ChildAgentError(
                                 "structured output retry exhaustion after "
@@ -613,6 +669,8 @@ class HermesChildAgentRunner(ChildAgentRunner):
                         if isinstance(previous_messages, list):
                             history = previous_messages
                         message = STRUCTURED_OUTPUT_CONTINUE_MESSAGE
+                        if structured_warning:
+                            message += "\n\n" + structured_warning
                 finally:
                     if approval_token is not None and reset_current_session_key is not None:
                         try:
@@ -637,6 +695,8 @@ class HermesChildAgentRunner(ChildAgentRunner):
         result: dict[str, Any] | None = None
         try:
             result = future.result(timeout=timeout) or {}
+            if non_progress_stop_reason:
+                raise ChildAgentError(non_progress_stop_reason)
             content = str(result.get("final_response") or "")
             # A hard child failure (e.g. a non-retryable API error) returns an
             # "error" string and no usable final_response. Surface it as a real
@@ -646,6 +706,11 @@ class HermesChildAgentRunner(ChildAgentRunner):
             if failure:
                 raise ChildAgentError(failure)
             metadata = _child_metadata(child, result, lease, agent_type, toolsets)
+            if non_progress_events:
+                metadata["non_progress"] = {
+                    "latest": dict(non_progress_events[-1]),
+                    "events": [dict(item) for item in non_progress_events],
+                }
             return ChildAgentResult(content=content, metadata=metadata)
         except FuturesTimeoutError as exc:
             try:
@@ -653,6 +718,10 @@ class HermesChildAgentRunner(ChildAgentRunner):
                     child.interrupt()
             finally:
                 raise WorkflowTimeout(f"child agent timed out after {timeout:.0f}s") from exc
+        except BaseException as exc:
+            if non_progress_stop_reason and not isinstance(exc, ChildAgentError):
+                raise ChildAgentError(non_progress_stop_reason) from exc
+            raise
         finally:
             try:
                 from ..adapters.hooks import unregister_child_observer
@@ -727,6 +796,7 @@ def build_child_system_prompt(
     lines = [
         "You are a subagent spawned by a workflow orchestration script.",
         "Use the tools available to complete the task.",
+        "Before another search or read, ask whether you already have enough information to execute or submit the required result. Do not repeat equivalent activity without a concrete new reason.",
         "Your final text response is returned verbatim as a string to the calling script — it is your return value, not a message to a human.",
     ]
     if agent_type is not None:

@@ -3,3 +3,4 @@ hermes-workflows = hermes_dynamic_workflows.tui.app:main
 
 [hermes_agent.plugins]
 dynamic-workflows = hermes_dynamic_workflows.entry
+execution-supervisor = hermes_execution_supervisor.entry

@@ -29,6 +29,6 @@ Build each task from the objective and its explicit targets:
 - Write reviewer guidance specific to the objective, acceptance criteria, expected workspace evidence, and rejection conditions.
 - Use workspace, folder, or project terminology unless the objective explicitly requires Git or repository behavior.
 
-Inspect only the minimum context needed to make the plan executable. Begin with explicit targets and expand retrieval only for a direct dependency or unresolved ambiguity. Stop inspecting once the task boundaries, authorization, acceptance criteria, and evidence requirements are clear.
+Inspect only the minimum context needed to make the plan executable. Begin with explicit targets and expand retrieval only for a direct dependency or unresolved ambiguity. Periodically ask whether the current evidence is already sufficient to submit the package; stop inspecting once the task boundaries, authorization, acceptance criteria, and evidence requirements are clear.
 
 Never invent evidence or silently narrow the objective. Surface material assumptions, unknowns, external blockers, and integration expectations in the structured package, then call `structured_output` once with the complete PlanPackage.

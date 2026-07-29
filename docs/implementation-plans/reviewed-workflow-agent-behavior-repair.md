@@ -482,7 +482,7 @@ Require real structured handoff tool calls and keep broker routing safe under co
 
 ### Step 7 — Add self-regulation guidance and non-progress circuit breakers
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -518,6 +518,31 @@ Prevent planning and child-role exploration loops without turning hard limits in
 - Legitimate multi-step work below the configured safety boundaries is not prematurely stopped.
 - Intervention is visible through existing workflow telemetry.
 - Update this step to `DONE` with evidence and commit SHA.
+
+#### Completion record
+
+- Changed files:
+  - `hermes_dynamic_workflows/child/non_progress.py`
+  - `hermes_dynamic_workflows/child/runner.py`
+  - `hermes_dynamic_workflows/adapters/hooks.py`
+  - `hermes_dynamic_workflows/core/config.py`
+  - `hermes_dynamic_workflows/agents/initial-orchestrator.md`
+  - `tests/test_non_progress.py`
+  - `docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md`
+- Implemented behavior:
+  - configurable repeated-signature detection for equivalent read/search activity and unchanged invalid structured submissions;
+  - staged warning that blocks the repeated call and asks the child to complete or make one materially different justified call;
+  - continued identical behavior interrupts the child and fails closed with a specific non-progress reason;
+  - hashed signatures and interventions flow through the existing child update metadata, while the blocked tool result remains visible in the transcript;
+  - normal wall-clock, token, task-count, repair, retry, approval, command-guard, accounting, persistence, and resume boundaries remain unchanged;
+  - the circuit breaker observes activity only and does not classify objectives, synthesize plans, or impose a universal tool-call cap.
+- Focused tests: `python -m unittest discover -s tests -p <focused-file> -v` for `test_non_progress.py`, `test_child_agent.py`, and `test_reviewed_agent_behavior_contract.py` — test_non_progress.py: 9 tests in 0.003s, OK; test_child_agent.py: 58 tests in 0.117s, OK; test_reviewed_agent_behavior_contract.py: 10 tests in 0.023s, OK.
+- Residual risks/deferred work:
+  - equivalence is based on normalized observable tool name and arguments; alternating semantically equivalent calls with materially different arguments may require future detection refinement;
+  - repository tests do not prove provider-specific live tool-hook behavior;
+  - live Hermes installation and canaries remain explicitly deferred to the separate deployment handoff.
+- Resulting commit:
+  - this implementation-and-plan commit; its exact SHA is recorded in branch history and the execution report because a commit cannot contain its own final SHA.
 
 ---
 

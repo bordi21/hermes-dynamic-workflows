@@ -68,6 +68,11 @@ hermes_dynamic_workflows/tui/render.py
 hermes_dynamic_workflows/view/__init__.py
 hermes_dynamic_workflows/view/render.py
 hermes_dynamic_workflows/workflows/reviewed-workflow.py
+hermes_execution_supervisor/__init__.py
+hermes_execution_supervisor/controller.py
+hermes_execution_supervisor/entry.py
+hermes_execution_supervisor/judge.py
+hermes_execution_supervisor/supervisor.py
 tests/test_approval_hook.py
 tests/test_audit_remediations.py
 tests/test_child_agent.py
@@ -75,12 +80,15 @@ tests/test_commands.py
 tests/test_control.py
 tests/test_directory_plugin.py
 tests/test_display.py
+tests/test_execution_supervisor.py
 tests/test_final_validation_action.py
 tests/test_initial_planning.py
 tests/test_installer.py
 tests/test_launch_approval.py
+tests/test_reviewed_agent_behavior_contract.py
 tests/test_reviewed_skip_state.py
 tests/test_reviewed_state.py
+tests/test_reviewed_steps_5_6.py
 tests/test_reviewed_task_execution.py
 tests/test_reviewed_workflow_action.py
 tests/test_reviewed_workflow_entrypoint.py

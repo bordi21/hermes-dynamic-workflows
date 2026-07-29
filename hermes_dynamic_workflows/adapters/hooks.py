@@ -29,7 +29,9 @@ from typing import Any, Callable
 # Child task ids are minted as ``workflow-<uuid>`` by the runner.
 WORKFLOW_CHILD_PREFIX = "workflow-"
 TERMINAL_TOOLS = {"terminal"}
-_CHILD_OBSERVERS: dict[str, Callable[[dict[str, Any]], None]] = {}
+_CHILD_OBSERVERS: dict[
+    str, Callable[[dict[str, Any]], dict[str, str] | None]
+] = {}
 _CHILD_OBSERVERS_LOCK = threading.RLock()
 _READ_ONLY_REDIRECT_RE = re.compile(r'(?:^|\s)(?:[0-9]?>|[0-9]?>>|&>)\s*(["\']?)([^\s"\']+)\1')
 _MUTATING_SHELL_RE = re.compile(
@@ -81,7 +83,10 @@ _READ_ONLY_FILTER_COMMANDS = {
 }
 
 
-def register_child_observer(task_id: str, callback: Callable[[dict[str, Any]], None]) -> None:
+def register_child_observer(
+    task_id: str,
+    callback: Callable[[dict[str, Any]], dict[str, str] | None],
+) -> None:
     if not task_id or not callable(callback):
         return
     with _CHILD_OBSERVERS_LOCK:
@@ -93,15 +98,19 @@ def unregister_child_observer(task_id: str) -> None:
         _CHILD_OBSERVERS.pop(task_id, None)
 
 
-def _notify_child_observer(task_id: str, event: dict[str, Any]) -> None:
+def _notify_child_observer(
+    task_id: str,
+    event: dict[str, Any],
+) -> dict[str, str] | None:
     with _CHILD_OBSERVERS_LOCK:
         callback = _CHILD_OBSERVERS.get(task_id)
     if callback is None:
-        return
+        return None
     try:
-        callback(event)
+        directive = callback(event)
     except Exception:
-        pass
+        return None
+    return directive if isinstance(directive, dict) else None
 
 
 def _tool_activity(tool_name: str, args: Any) -> str:
@@ -439,7 +448,7 @@ def pre_tool_call_handler(
     if not (isinstance(task_id, str) and task_id.startswith(WORKFLOW_CHILD_PREFIX)):
         return None
     clean_tool_name = str(tool_name or "tool")
-    _notify_child_observer(
+    observer_directive = _notify_child_observer(
         task_id,
         {
             "type": "tool_call",
@@ -448,6 +457,8 @@ def pre_tool_call_handler(
             "activity": _tool_activity(clean_tool_name, args),
         },
     )
+    if observer_directive is not None:
+        return observer_directive
     if tool_name not in TERMINAL_TOOLS:
         return None
     command = args.get("command") if isinstance(args, dict) else None
