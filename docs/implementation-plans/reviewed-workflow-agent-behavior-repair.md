@@ -541,14 +541,13 @@ Prevent planning and child-role exploration loops without turning hard limits in
   - equivalence is based on normalized observable tool name and arguments; alternating semantically equivalent calls with materially different arguments may require future detection refinement;
   - repository tests do not prove provider-specific live tool-hook behavior;
   - live Hermes installation and canaries remain explicitly deferred to the separate deployment handoff.
-- Resulting commit:
-  - this implementation-and-plan commit; its exact SHA is recorded in branch history and the execution report because a commit cannot contain its own final SHA.
+- Resulting commit: `e099345b5743da73f1dc8ac83118426b349bf8a9`.
 
 ---
 
 ### Step 8 — Integrated validation, documentation, and Hermes deployment handoff
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -590,6 +589,34 @@ Prove the repaired lifecycle on the repository branch, then prepare an exact ins
 - Documentation matches verified behavior.
 - A deployment handoff exists for exact-SHA installation and live proof.
 - Update this step to `DONE` with evidence and commit SHA.
+
+#### Completion record
+
+- Changed files:
+  - `tests/test_reviewed_repository_scenarios.py`
+  - `README.md`
+  - `TECHNICAL.md`
+  - `WORKFLOW_CONTRACT.md`
+  - `docs/deployment/reviewed-workflow-hermes-deployment-handoff.md`
+  - `docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md`
+- Repository integration scenarios:
+  1. exact named-file read-only request: one precise task, exact path, empty mutations;
+  2. small precise modification: one bounded deliverable and exact mutation path;
+  3. decomposable objective: independent tasks plus a correctly ordered dependent task;
+  4. worker result reviewed FAIL, fresh repair worker, second review PASS, then integration;
+  5. BLOCKED terminal handling and exhausted-repair FAILED reporting without integration;
+  6. simultaneous structured children retained isolated task identities and results.
+- Lifecycle evidence verifies registered planning, worker result, reviewer verdict, bounded repair, PASS-only integration, final validation, and deterministic terminal reporting through the canonical Actions and state.
+- Focused scenario commands: `python -m unittest discover -s tests -p <scenario-file> -v` for `test_reviewed_repository_scenarios.py`, `test_reviewed_workflow_action.py`, `test_reviewed_task_execution.py`, and `test_reviewed_steps_5_6.py` — test_reviewed_repository_scenarios.py: 3 tests in 0.138s, OK; test_reviewed_workflow_action.py: 5 tests in 0.012s, OK; test_reviewed_task_execution.py: 9 tests in 0.245s, OK; test_reviewed_steps_5_6.py: 10 tests in 0.056s, OK.
+- Full regression command: `/opt/hostedtoolcache/Python/3.11.15/x64/bin/python -m unittest discover -s tests -v` — 357 tests in 6.243s, OK.
+- Documentation now describes the verified non-progress behavior and configuration, and the deployment handoff requires exact-SHA installation plus three separate live canaries.
+- Known limitations and residual risks:
+  - all evidence is repository-level; no provider, gateway, installed-plugin, VPS, or live Hermes canary was executed;
+  - hook serialization and provider-specific tool behavior still require the deployment canaries;
+  - non-Git mutation workspaces remain unsupported and fail clearly as documented;
+  - exact crash recovery remains unclaimed until separately verified end to end.
+- Resulting commit:
+  - this implementation-and-plan commit; its exact SHA is recorded in branch history and the execution report because a commit cannot contain its own final SHA.
 
 ## 5. Per-step execution protocol
 

@@ -66,9 +66,14 @@ incomplete cycles stop fail-closed rather than being reported as success.
 
 ### Verification status
 
-The complete named lifecycle is repository-verified with focused and full regression
-tests. Installation-specific behavior—provider routing, approvals, notifications,
-persistence, control commands, resume semantics, and crash recovery—must still be
+The complete named lifecycle is repository-verified with focused scenarios and the full
+regression suite. Child roles also use a configurable repeated-signature circuit breaker:
+an equivalent read/search loop first receives a visible completion warning, then stops
+fail-closed if identical activity continues. This observes activity rather than classifying
+tasks and is not a universal tool-call budget.
+
+Installation-specific behavior—provider routing, approvals, notifications, persistence,
+control commands, resume semantics, hook serialization, and crash recovery—must still be
 verified in the target Hermes environment before being treated as live proof.
 
 ### Live Dashboard (optional, requires a separate step)
@@ -100,6 +105,9 @@ plugins:
         max_agents: 1000              # Max total agents per run (runaway guard)
         workflow_timeout_seconds: 900 # Wall-clock timeout for the whole run (excludes paused time)
         child_timeout_seconds: 300    # Timeout for a single child agent
+        non_progress_detection_enabled: true  # Warn, then stop repeated equivalent child activity
+        non_progress_warning_repeats: 3       # First staged intervention for one repeated signature
+        non_progress_stop_repeats: 5          # Fail closed if the same activity continues
         blocked_child_toolsets: [workflow, workflows, delegation, code_execution, messaging, clarify]
                                       # Toolsets child agents are forbidden to use
         default_child_toolsets: [web, file, terminal, skills]

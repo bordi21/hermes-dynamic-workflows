@@ -102,6 +102,17 @@ second runner, FSM database, workflow engine, or telemetry channel. Role model r
 remains provider-neutral and configurable for `initial-orchestrator`, `worker`,
 `reviewer`, `repair-worker`, and `final-orchestrator`.
 
+The existing pre-tool observer also supplies a per-child non-progress circuit breaker.
+It hashes normalized tool names and arguments, warns when one read/search signature is
+repeated, blocks that duplicate call with an instruction to complete or materially change
+approach, and interrupts the child if identical behavior continues. Repeated unchanged
+structured-output validation failures use the same staged policy. The signature and
+intervention are emitted through existing child update metadata, while the block result is
+part of the normal child transcript. Thresholds are configurable; wall-clock, token,
+repair, task-count, retry, approval, command-guard, accounting, persistence, and resume
+controls remain the final boundaries. No objective classifier or universal tool-call cap is
+introduced.
+
 ## Tools
 
 The plugin registers two main-agent tools with Hermes (`workflow`, `task_stop`) and one

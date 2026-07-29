@@ -259,6 +259,8 @@ child_timeout_seconds: 300
 
 These are illustrative defaults, not hardcoded constants. Existing Hermes configuration, approvals, runtime controls, persistence, telemetry, transcripts, accounting, resume behavior, memory behavior, SOUL loading, and worktree support remain authoritative and must be reused.
 
+Child roles must periodically decide whether available evidence is already sufficient to execute or submit. Configurable repeated-signature detection may warn and then stop equivalent observable read/search or invalid-submission loops, but it must remain a circuit breaker: it may not classify task complexity, replace model judgment, or turn a tool-call budget into a target.
+
 ## Non-negotiable invariants
 
 1. One launching Hermes profile owns the complete run.
