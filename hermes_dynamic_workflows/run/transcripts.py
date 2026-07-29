@@ -211,8 +211,12 @@ class SessionTranscriptReader:
             fallback = _load_session_messages(target.session_id)
             if fallback:
                 messages = fallback
+        messages = messages or []
         signature = _json_signature(messages)
-        action = "unchanged" if signature == target.transcript_signature else "rebuild"
+        if not messages and target.transcript_path.is_file() and target.transcript_path.stat().st_size > 0:
+            action = "unchanged"
+        else:
+            action = "unchanged" if signature == target.transcript_signature else "rebuild"
         target.transcript_signature = signature
         target.export_mode = "full_fallback"
         target.fallback_reason = reason
@@ -467,12 +471,16 @@ class LiveTranscriptExporter:
             {key: value for key, value in metadata.items() if key != "updated_at"}
         )
         if read.action == "rebuild":
-            _write_agent_transcript_files(
-                transcript_path,
-                meta_path,
-                metadata=metadata,
-                messages=read.messages,
-            )
+            if not read.messages and transcript_path.is_file() and transcript_path.stat().st_size > 0:
+                if metadata_signature != previous_metadata_signature:
+                    _write_json_atomic(meta_path, metadata)
+            else:
+                _write_agent_transcript_files(
+                    transcript_path,
+                    meta_path,
+                    metadata=metadata,
+                    messages=read.messages or [],
+                )
         elif read.action == "append":
             _append_agent_transcript_messages(transcript_path, read.messages)
             if metadata_signature != previous_metadata_signature:
@@ -532,11 +540,16 @@ def _write_agent_transcript(
     session_id: str,
 ) -> None:
     messages = _load_session_messages(session_id)
+    if not messages and path.is_file() and path.stat().st_size > 0:
+        meta_path = _agent_meta_path(path)
+        if not meta_path.is_file():
+            _write_json_atomic(meta_path, _agent_transcript_metadata(record, agent, session_id))
+        return
     _write_agent_transcript_files(
         path,
         _agent_meta_path(path),
         metadata=_agent_transcript_metadata(record, agent, session_id),
-        messages=messages,
+        messages=messages or [],
     )
 
 

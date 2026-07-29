@@ -1015,6 +1015,35 @@ return await agent("do it", {"label": "worker"})
             self.assertGreaterEqual(db.get_messages_calls, 3)
             self.assertIn("second", after)
 
+    def test_empty_session_messages_does_not_overwrite_existing_transcript(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db = PublicOnlyTranscriptDB()
+            db.messages["existing-session"] = [{"role": "user", "content": "valid content"}]
+            exporter = LiveTranscriptExporter(
+                run_id="wf_empty-rebuild-test",
+                interval_seconds=60,
+                reader=SessionTranscriptReader(db=db),
+            )
+            transcript_path = root / "agent-existing-session.jsonl"
+            meta_path = transcript_path.with_suffix(".meta.json")
+            exporter.upsert(
+                session_id="existing-session",
+                transcript_path=transcript_path,
+                meta_path=meta_path,
+                metadata={"session_id": "existing-session", "agent_status": "running"},
+                active=True,
+            )
+            content_before = transcript_path.read_text(encoding="utf-8")
+            self.assertIn("valid content", content_before)
+
+            # Clear DB messages to simulate empty return
+            db.messages["existing-session"] = []
+            exporter.flush(active_only=True, force_rebuild=True)
+            content_after = transcript_path.read_text(encoding="utf-8")
+            self.assertEqual(content_before, content_after)
+            exporter.stop(final=True)
+
     def test_live_transcript_append_uses_single_os_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "agent-child.jsonl"

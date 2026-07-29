@@ -26,6 +26,7 @@ from .structured_output import (
     STRUCTURED_OUTPUT_TOOL_NAME,
     STRUCTURED_OUTPUT_TOOLSET,
     build_tool_schema_instruction,
+    child_task_id_scope,
     clear_expectation,
     peek_result,
     register_expectation,
@@ -441,57 +442,58 @@ class HermesChildAgentRunner(ChildAgentRunner):
                     pass
 
         def _run() -> dict[str, Any]:
-            approval_token = None
-            reset_current_session_key = None
-            if self._approval_session_key:
-                try:
-                    from tools.approval import (
-                        reset_current_session_key as _reset_current_session_key,
-                        set_current_session_key,
-                    )
-
-                    approval_token = set_current_session_key(self._approval_session_key)
-                    reset_current_session_key = _reset_current_session_key
-                except Exception:
-                    pass
-            try:
-                _register_task_cwd(lease.task_id, lease.cwd)
-                message = build_child_task_message(request, workspace=lease.cwd)
-                history = None
-                stop_attempts = 0
-                while True:
-                    result = child.run_conversation(
-                        user_message=message,
-                        conversation_history=history,
-                        task_id=lease.task_id,
-                    )
-                    if not request.structured_tool:
-                        return result
-
-                    captured, _value, tool_attempts = peek_result(lease.task_id)
-                    if captured:
-                        return result
-
-                    stop_attempts += 1
-                    if (
-                        tool_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES
-                        or stop_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES
-                    ):
-                        raise ChildAgentError(
-                            "Failed to provide valid structured output after "
-                            f"{MAX_STRUCTURED_OUTPUT_RETRIES} attempts"
+            with child_task_id_scope(lease.task_id):
+                approval_token = None
+                reset_current_session_key = None
+                if self._approval_session_key:
+                    try:
+                        from tools.approval import (
+                            reset_current_session_key as _reset_current_session_key,
+                            set_current_session_key,
                         )
 
-                    previous_messages = result.get("messages") if isinstance(result, dict) else None
-                    if isinstance(previous_messages, list):
-                        history = previous_messages
-                    message = STRUCTURED_OUTPUT_CONTINUE_MESSAGE
-            finally:
-                if approval_token is not None and reset_current_session_key is not None:
-                    try:
-                        reset_current_session_key(approval_token)
+                        approval_token = set_current_session_key(self._approval_session_key)
+                        reset_current_session_key = _reset_current_session_key
                     except Exception:
                         pass
+                try:
+                    _register_task_cwd(lease.task_id, lease.cwd)
+                    message = build_child_task_message(request, workspace=lease.cwd)
+                    history = None
+                    stop_attempts = 0
+                    while True:
+                        result = child.run_conversation(
+                            user_message=message,
+                            conversation_history=history,
+                            task_id=lease.task_id,
+                        )
+                        if not request.structured_tool:
+                            return result
+
+                        captured, _value, tool_attempts = peek_result(lease.task_id)
+                        if captured:
+                            return result
+
+                        stop_attempts += 1
+                        if (
+                            tool_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES
+                            or stop_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES
+                        ):
+                            raise ChildAgentError(
+                                "Failed to provide valid structured output after "
+                                f"{MAX_STRUCTURED_OUTPUT_RETRIES} attempts"
+                            )
+
+                        previous_messages = result.get("messages") if isinstance(result, dict) else None
+                        if isinstance(previous_messages, list):
+                            history = previous_messages
+                        message = STRUCTURED_OUTPUT_CONTINUE_MESSAGE
+                finally:
+                    if approval_token is not None and reset_current_session_key is not None:
+                        try:
+                            reset_current_session_key(approval_token)
+                        except Exception:
+                            pass
 
         executor = ThreadPoolExecutor(
             max_workers=1,

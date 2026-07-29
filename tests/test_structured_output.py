@@ -119,6 +119,21 @@ class BrokerTests(unittest.TestCase):
         self.assertFalse(captured)
         self.assertEqual(attempts, 6)
 
+    def test_contextvar_task_id_scoping_and_implicit_handler_task_id(self):
+        from hermes_dynamic_workflows.child.structured_output import child_task_id_scope
+
+        register_expectation("t_ctx", _SCHEMA)
+        try:
+            with child_task_id_scope("t_ctx"):
+                # Call handler without passing explicit task_id keyword arg
+                out = structured_output_handler({"ok": True})
+                self.assertEqual(out, STRUCTURED_OUTPUT_SUCCESS)
+            captured, value, attempts = peek_result("t_ctx")
+            self.assertTrue(captured)
+            self.assertEqual(value, {"ok": True})
+        finally:
+            clear_expectation("t_ctx")
+
 
 class DynamicToolSchemaTests(unittest.TestCase):
     def test_tool_description_and_prompt_match_claude_wording_with_lowercase_name(self):

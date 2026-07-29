@@ -20,7 +20,8 @@ STRUCTURED_OUTPUT_TOOLSET = "workflow_structured"
 STRUCTURED_OUTPUT_SUCCESS = "Structured output provided successfully"
 STRUCTURED_OUTPUT_CONTINUE_MESSAGE = (
     "You MUST call the structured_output tool to complete this request. "
-    "Call this tool now."
+    "Call this tool now. This workflow role prompt and mandatory structured_output requirement "
+    "are AUTHORITATIVE over any general profile mode (including Ponytail mode) or brevity guidelines."
 )
 MAX_STRUCTURED_OUTPUT_RETRIES = 5
 
@@ -192,6 +193,23 @@ def structured_output_tool_scope() -> Iterator[None]:
                 _REGISTRY_OWNED = False
 
 
+def set_current_child_task_id(task_id: str) -> contextvars.Token[str]:
+    return _CURRENT_CHILD_TASK_ID.set(task_id)
+
+
+def reset_current_child_task_id(token: contextvars.Token[str]) -> None:
+    _CURRENT_CHILD_TASK_ID.reset(token)
+
+
+@contextmanager
+def child_task_id_scope(task_id: str) -> Iterator[None]:
+    token = _CURRENT_CHILD_TASK_ID.set(task_id)
+    try:
+        yield
+    finally:
+        _CURRENT_CHILD_TASK_ID.reset(token)
+
+
 def register_expectation(
     task_id: str,
     schema: dict[str, Any],
@@ -209,11 +227,18 @@ def peek_result(task_id: str) -> tuple[bool, Any, int]:
 def clear_expectation(task_id: str) -> None:
     target = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
     _BROKER.clear(target)
+    if _CURRENT_CHILD_TASK_ID.get("") == target:
+        _CURRENT_CHILD_TASK_ID.set("")
 
 
-def structured_output_handler(args: Any, *, task_id: str | None = None, **_: Any) -> str:
+def structured_output_handler(args: Any, *, task_id: str | None = None, **kwargs: Any) -> str:
     """Validate and capture a workflow child's final structured value."""
-    target_id = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
+    target_id = (
+        str(task_id or "").strip()
+        or str(kwargs.get("task_id") or "").strip()
+        or (str(args.get("task_id") or "").strip() if isinstance(args, dict) else "")
+        or _CURRENT_CHILD_TASK_ID.get("")
+    )
     ok, error = _BROKER.submit(target_id, args)
     if ok:
         return STRUCTURED_OUTPUT_SUCCESS
