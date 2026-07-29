@@ -46,12 +46,40 @@ def build_tool_schema_instruction() -> str:
     )
 
 
+def _sanitize_tool_parameters_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Sanitize JSON Schema for LLM tool function parameters (strip $schema, replace const with enum)."""
+    def _clean_node(node: Any) -> Any:
+        if isinstance(node, dict):
+            res = {}
+            for k, v in node.items():
+                if k in ("$schema", "$id", "$comment"):
+                    continue
+                if k == "const":
+                    res["enum"] = [v]
+                    if "type" not in res and "type" not in node:
+                        if isinstance(v, str):
+                            res["type"] = "string"
+                        elif isinstance(v, bool):
+                            res["type"] = "boolean"
+                        elif isinstance(v, int):
+                            res["type"] = "integer"
+                else:
+                    res[k] = _clean_node(v)
+            return res
+        elif isinstance(node, list):
+            return [_clean_node(item) for item in node]
+        return node
+
+    return _clean_node(deepcopy(schema))
+
+
 def specialize_structured_output_tool(
     tools: list[dict[str, Any]] | None,
     schema: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """Return child-local tool definitions with the target schema installed."""
     validate_json_schema(schema)
+    sanitized_schema = _sanitize_tool_parameters_schema(schema)
     specialized = list(tools or [])
     for index, definition in enumerate(specialized):
         function = definition.get("function") if isinstance(definition, dict) else None
@@ -60,7 +88,7 @@ def specialize_structured_output_tool(
         replacement = deepcopy(definition)
         replacement_function = replacement["function"]
         replacement_function["description"] = "Return structured output in the requested format"
-        replacement_function["parameters"] = deepcopy(schema)
+        replacement_function["parameters"] = sanitized_schema
         specialized[index] = replacement
         return specialized
     raise RuntimeError("structured_output tool is not available to the workflow child")
