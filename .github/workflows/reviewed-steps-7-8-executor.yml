@@ -1,0 +1,50 @@
+name: Temporary reviewed workflow steps 7-8 executor
+
+on:
+  pull_request:
+    branches:
+      - plan/reviewed-workflow-agent-behavior
+
+permissions:
+  contents: write
+
+jobs:
+  execute:
+    if: github.event.pull_request.head.ref == 'automation/reviewed-steps-7-8-executor'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout executor branch
+        uses: actions/checkout@v4
+        with:
+          path: executor
+          fetch-depth: 1
+
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: plan/reviewed-workflow-agent-behavior
+          path: target
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install repository dependencies
+        run: python -m pip install -e target
+
+      - name: Decode executor
+        run: |
+          python - <<'PY'
+          import base64
+          import gzip
+          from pathlib import Path
+
+          encoded = Path('executor/.github/reviewed-steps-7-8-executor.b64').read_text(encoding='utf-8').strip()
+          Path('/tmp/execute_reviewed_steps_7_8.py').write_bytes(gzip.decompress(base64.b64decode(encoded)))
+          PY
+          python -m py_compile /tmp/execute_reviewed_steps_7_8.py
+
+      - name: Execute Steps 7 and 8
+        run: python /tmp/execute_reviewed_steps_7_8.py target
