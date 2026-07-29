@@ -332,7 +332,7 @@ Make a workflow child capable of executing the same scoped prompt as a manually 
 
 ### Step 5 — Rewrite Worker, Reviewer, Repair Worker, and Final Orchestrator role behavior
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -381,11 +381,39 @@ Give every execution and verification role precise behavioral guidance for retri
 - Focused tests cover simple, complex, failed, blocked, repaired, and final-validation behavior.
 - Update this step to `DONE` with evidence and commit SHA.
 
+#### Completion record
+
+- Changed files:
+  - `hermes_dynamic_workflows/agents/worker.md`
+  - `hermes_dynamic_workflows/agents/reviewer.md`
+  - `hermes_dynamic_workflows/agents/repair-worker.md`
+  - `hermes_dynamic_workflows/agents/final-orchestrator.md`
+  - `tests/test_reviewed_agent_behavior_contract.py`
+  - `tests/test_reviewed_steps_5_6.py`
+  - `docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md`
+- Implemented behavior:
+  - each role now has an explicit starting point, bounded retrieval rule, evidence duty, and stopping condition;
+  - workers stay inside the supplied task and never self-approve;
+  - reviewers verify every criterion with targeted evidence and never repair;
+  - repair workers preserve valid work, make materially different corrections, and never weaken criteria;
+  - final validation stays scoped to the original objective and emits delta tasks only for concrete remaining gaps;
+  - duplicate generic structured-output authority language was removed while normal profile context, tools, skills, integrations, approvals, and safety governance remain available.
+- Focused tests:
+  - role, execution, repair, blocked, and final-validation suites: 52 tests in 0.622s, OK.
+- Full regression suite:
+  - `python -m unittest discover -s tests -v`: 345 tests in 6.803s, OK.
+- Residual risks:
+  - repository tests validate prompt and lifecycle contracts but do not constitute live model/provider verification;
+  - live Hermes canaries and installation remain explicitly out of scope;
+  - non-progress circuit breakers remain deferred to Step 7.
+- Resulting commit:
+  - this implementation-and-plan commit; its exact SHA is recorded by the branch head and execution report because a commit cannot contain its own final SHA.
+
 ---
 
 ### Step 6 — Restore strict structured-output semantics
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -423,6 +451,32 @@ Require real structured handoff tool calls and keep broker routing safe under co
 - Invalid payloads receive actionable validation feedback and bounded retries.
 - Cleanup leaves no stale expectation or ContextVar identity.
 - Update this step to `DONE` with evidence and commit SHA.
+
+#### Completion record
+
+- Changed files:
+  - `hermes_dynamic_workflows/child/runner.py`
+  - `hermes_dynamic_workflows/child/structured_output.py`
+  - `tests/test_reviewed_agent_behavior_contract.py`
+  - `tests/test_child_agent.py`
+  - `tests/test_reviewed_steps_5_6.py`
+  - `docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md`
+- Implemented behavior:
+  - prose and fenced JSON are no longer parsed or accepted as successful handoffs;
+  - children receive the continuation instruction until a real `structured_output` tool call succeeds or bounded attempts are exhausted;
+  - single-expectation guessing was removed and broker routing now requires explicit or child-thread ContextVar identity;
+  - schema specialization, provider sanitization, per-task expectations, cleanup, and concurrent isolation remain canonical;
+  - telemetry now distinguishes a never-called tool, invalid payload retry exhaustion, missing or mismatched expectations, and tool-definition failure.
+- Focused tests:
+  - structured-output continuation, broker, concurrency, and role-contract suites: 52 tests in 0.622s, OK.
+- Full regression suite:
+  - `python -m unittest discover -s tests -v`: 345 tests in 6.803s, OK.
+- Residual risks:
+  - provider-specific tool-call serialization is covered by contract tests rather than a live provider call;
+  - live Hermes canaries and installation remain explicitly out of scope;
+  - later workflow self-regulation and recovery controls remain deferred to Steps 7 and 8.
+- Resulting commit:
+  - this implementation-and-plan commit; its exact SHA is recorded by the branch head and execution report because a commit cannot contain its own final SHA.
 
 ---
 

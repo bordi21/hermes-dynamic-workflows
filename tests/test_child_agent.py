@@ -1013,7 +1013,7 @@ class StructuredOutputContinuationTests(unittest.TestCase):
         finally:
             clear_expectation(lease.task_id)
 
-        self.assertIn("Failed to provide valid structured output", str(ctx.exception))
+        self.assertIn("structured_output tool was never called", str(ctx.exception))
         self.assertEqual(child.calls, MAX_STRUCTURED_OUTPUT_RETRIES)
 
 

@@ -28,6 +28,7 @@ from .structured_output import (
     build_tool_schema_instruction,
     child_task_id_scope,
     clear_expectation,
+    peek_error,
     peek_result,
     register_expectation,
     specialize_structured_output_tool,
@@ -301,7 +302,12 @@ class HermesChildAgentRunner(ChildAgentRunner):
                     read_only=bool(agent_type.read_only) if agent_type else False,
                 )
             if structured_tool:
-                child.tools = specialize_structured_output_tool(child.tools, request.schema)
+                try:
+                    child.tools = specialize_structured_output_tool(child.tools, request.schema)
+                except Exception as exc:
+                    raise ChildAgentError(
+                        f"structured output tool definition failed: {exc}"
+                    ) from exc
                 child.valid_tool_names.add(STRUCTURED_OUTPUT_TOOL_NAME)
             if request.on_start is not None:
                 try:
@@ -568,7 +574,7 @@ class HermesChildAgentRunner(ChildAgentRunner):
                     _register_task_cwd(lease.task_id, lease.cwd)
                     message = build_child_task_message(request, workspace=lease.cwd)
                     history = None
-                    stop_attempts = 0
+                    response_attempts = 0
                     while True:
                         result = child.run_conversation(
                             user_message=message,
@@ -579,27 +585,28 @@ class HermesChildAgentRunner(ChildAgentRunner):
                             return result
 
                         captured, _value, tool_attempts = peek_result(lease.task_id)
-                        if not captured:
-                            final_text = str(result.get("final_response") or result.get("content") or "").strip()
-                            if final_text:
-                                parsed_json = _extract_json_from_text(final_text)
-                                if parsed_json is not None:
-                                    from .structured_output import _BROKER
-                                    ok, _err = _BROKER.submit(lease.task_id, parsed_json)
-                                    if ok:
-                                        captured, _value, tool_attempts = peek_result(lease.task_id)
-
                         if captured:
                             return result
 
-                        stop_attempts += 1
-                        if (
-                            tool_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES
-                            or stop_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES
-                        ):
+                        response_attempts += 1
+                        last_error = peek_error(lease.task_id)
+                        if tool_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES:
                             raise ChildAgentError(
-                                "Failed to provide valid structured output after "
-                                f"{MAX_STRUCTURED_OUTPUT_RETRIES} attempts"
+                                "structured output retry exhaustion after "
+                                f"{tool_attempts} invalid tool submissions"
+                                + (f"; last validation error: {last_error}" if last_error else "")
+                            )
+                        if response_attempts >= MAX_STRUCTURED_OUTPUT_RETRIES:
+                            if tool_attempts == 0:
+                                raise ChildAgentError(
+                                    "structured_output tool was never called after "
+                                    f"{response_attempts} child responses"
+                                )
+                            raise ChildAgentError(
+                                "structured output retry exhaustion after "
+                                f"{response_attempts} child responses and {tool_attempts} invalid "
+                                "tool submissions"
+                                + (f"; last validation error: {last_error}" if last_error else "")
                             )
 
                         previous_messages = result.get("messages") if isinstance(result, dict) else None
@@ -1411,28 +1418,3 @@ def _callable_accepts_keyword(target: Any, keyword: str) -> bool:
         if parameter.name == keyword:
             return True
     return False
-
-
-def _extract_json_from_text(text: str) -> Any | None:
-    """Best-effort extraction of JSON payload from child agent text response."""
-    raw = str(text or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
-    try:
-        return json.loads(raw)
-    except Exception:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(raw[start : end + 1])
-            except Exception:
-                pass
-    return None

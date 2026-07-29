@@ -102,6 +102,7 @@ class _StructuredOutputBroker:
         self._expect: dict[str, dict[str, Any]] = {}
         self._results: dict[str, Any] = {}
         self._attempts: dict[str, int] = {}
+        self._last_errors: dict[str, str] = {}
         self._on_exhausted: dict[str, Callable[[], Any]] = {}
         self._exhausted: set[str] = set()
 
@@ -117,6 +118,7 @@ class _StructuredOutputBroker:
             self._expect[task_id] = schema
             self._attempts[task_id] = 0
             self._results.pop(task_id, None)
+            self._last_errors.pop(task_id, None)
             self._exhausted.discard(task_id)
             if on_exhausted is None:
                 self._on_exhausted.pop(task_id, None)
@@ -124,30 +126,39 @@ class _StructuredOutputBroker:
                 self._on_exhausted[task_id] = on_exhausted
 
     def submit(self, task_id: str, value: Any) -> tuple[bool, str]:
+        target = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
+        if not target:
+            return False, "root: missing structured-output task identity"
         with self._lock:
-            if not task_id:
-                task_id = _CURRENT_CHILD_TASK_ID.get("")
-            if not task_id and len(self._expect) == 1:
-                task_id = next(iter(self._expect.keys()))
-            schema = self._expect.get(task_id)
-            attempts = self._attempts.get(task_id, 0) + 1
-            self._attempts[task_id] = attempts
-        if schema is None:
-            return False, "root: no structured-output expectation is registered for this task"
+            schema = self._expect.get(target)
+            if schema is None:
+                return False, (
+                    "root: no structured-output expectation is registered for task "
+                    f"{target!r}"
+                )
+            attempts = self._attempts.get(target, 0) + 1
+            self._attempts[target] = attempts
         if attempts > MAX_STRUCTURED_OUTPUT_RETRIES:
-            return False, (
+            error = (
                 "root: maximum structured output attempts exceeded "
                 f"({MAX_STRUCTURED_OUTPUT_RETRIES})"
             )
+            with self._lock:
+                self._last_errors[target] = error
+            return False, error
 
         errors = _validation_errors(value, schema)
         if errors:
+            error = ", ".join(errors)
+            with self._lock:
+                self._last_errors[target] = error
             if attempts >= MAX_STRUCTURED_OUTPUT_RETRIES:
-                self._interrupt_exhausted(task_id)
-            return False, ", ".join(errors)
+                self._interrupt_exhausted(target)
+            return False, error
 
         with self._lock:
-            self._results[task_id] = value
+            self._results[target] = value
+            self._last_errors.pop(target, None)
         return True, ""
 
     def peek(self, task_id: str) -> tuple[bool, Any, int]:
@@ -157,11 +168,16 @@ class _StructuredOutputBroker:
                 return True, self._results[task_id], attempts
             return False, None, attempts
 
+    def peek_error(self, task_id: str) -> str:
+        with self._lock:
+            return self._last_errors.get(task_id, "")
+
     def clear(self, task_id: str) -> None:
         with self._lock:
             self._expect.pop(task_id, None)
             self._results.pop(task_id, None)
             self._attempts.pop(task_id, None)
+            self._last_errors.pop(task_id, None)
             self._on_exhausted.pop(task_id, None)
             self._exhausted.discard(task_id)
 
@@ -243,13 +259,17 @@ def register_expectation(
     schema: dict[str, Any],
     on_exhausted: Callable[[], Any] | None = None,
 ) -> None:
-    _CURRENT_CHILD_TASK_ID.set(task_id)
     _BROKER.register(task_id, schema, on_exhausted)
 
 
 def peek_result(task_id: str) -> tuple[bool, Any, int]:
     target = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
     return _BROKER.peek(target)
+
+
+def peek_error(task_id: str) -> str:
+    target = str(task_id or "").strip() or _CURRENT_CHILD_TASK_ID.get("")
+    return _BROKER.peek_error(target)
 
 
 def clear_expectation(task_id: str) -> None:
@@ -264,7 +284,6 @@ def structured_output_handler(args: Any, *, task_id: str | None = None, **kwargs
     target_id = (
         str(task_id or "").strip()
         or str(kwargs.get("task_id") or "").strip()
-        or (str(args.get("task_id") or "").strip() if isinstance(args, dict) else "")
         or _CURRENT_CHILD_TASK_ID.get("")
     )
     ok, error = _BROKER.submit(target_id, args)

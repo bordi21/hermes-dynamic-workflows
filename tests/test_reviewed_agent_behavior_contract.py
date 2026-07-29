@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 import textwrap
 import unittest
 from pathlib import Path
@@ -18,12 +17,6 @@ from hermes_dynamic_workflows.child.runner import (
     build_child_system_prompt,
     build_child_task_message,
 )
-from hermes_dynamic_workflows.child.structured_output import (
-    _BROKER,
-    clear_expectation,
-    peek_result,
-    register_expectation,
-)
 from hermes_dynamic_workflows.core.types import ChildAgentRequest
 
 
@@ -36,13 +29,6 @@ _ROLES = (
     "repair-worker",
     "final-orchestrator",
 )
-_FALLBACK_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {"ok": {"type": "boolean"}},
-    "required": ["ok"],
-}
-
 
 def _role_body(name: str) -> str:
     text = (_AGENTS_ROOT / f"{name}.md").read_text(encoding="utf-8")
@@ -199,29 +185,15 @@ class ToolAndStructuredOutputCharacterizationTests(unittest.TestCase):
         )
         self.assertEqual(explicit, ["file"])
 
-    def test_prose_json_fallback_path_can_accept_success_without_tool_call(self):
-        self.assertFalse(
-            hasattr(child_runner, "json"),
-            "The authoritative head currently leaves the fallback parser inert; Step 6 owns removal.",
-        )
-        task_id = "contract-prose-json-fallback"
-        register_expectation(task_id, _FALLBACK_SCHEMA)
-        try:
-            with patch.object(child_runner, "json", json, create=True):
-                parsed = child_runner._extract_json_from_text(
-                    "Result supplied as prose instead of a tool call:\n"
-                    "```json\n{\"ok\": true}\n```"
-                )
-            self.assertEqual(parsed, {"ok": True})
+    def test_text_json_cannot_bypass_the_structured_tool(self):
+        source = inspect.getsource(HermesChildAgentRunner._run_child_with_timeout)
+        self.assertFalse(hasattr(child_runner, "_extract_json_from_text"))
+        self.assertNotIn("_extract_json_from_text", source)
+        self.assertNotIn("_BROKER.submit", source)
 
-            accepted, error = _BROKER.submit(task_id, parsed)
-            self.assertTrue(accepted, error)
-            captured, value, attempts = peek_result(task_id)
-            self.assertTrue(captured)
-            self.assertEqual(value, {"ok": True})
-            self.assertEqual(attempts, 1)
-        finally:
-            clear_expectation(task_id)
+    def test_provider_or_tool_definition_failure_is_classified(self):
+        source = inspect.getsource(HermesChildAgentRunner.run)
+        self.assertIn("structured output tool definition failed", source)
 
 
 if __name__ == "__main__":
