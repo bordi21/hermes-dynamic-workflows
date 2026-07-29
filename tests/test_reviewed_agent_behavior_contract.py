@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import textwrap
 import unittest
 from pathlib import Path
@@ -9,10 +10,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from hermes_dynamic_workflows.actions.planning import InitialPlanningAction, PlanningLimits
+from hermes_dynamic_workflows.child import runner as child_runner
 from hermes_dynamic_workflows.child.presets import AgentTypeSpec
 from hermes_dynamic_workflows.child.runner import (
     HermesChildAgentRunner,
-    _extract_json_from_text,
     _resolve_child_toolsets,
     build_child_system_prompt,
     build_child_task_message,
@@ -127,7 +128,7 @@ class InitialPlannerBehaviorContractTests(unittest.TestCase):
         self.assertIn("real dependencies", role)
         self.assertIn("artificial discovery", role)
         self.assertIn("exact named paths", role)
-        self.assertIn("empty allowed_mutations", role)
+        self.assertIn("use empty `allowed_mutations`", role)
         self.assertIn("clear stopping condition", role)
         self.assertIn("workspace, folder, or project", role)
 
@@ -192,13 +193,19 @@ class ToolAndStructuredOutputCharacterizationTests(unittest.TestCase):
             ["file", "terminal", "mcp-demo", "plugin-demo"],
         )
 
-    def test_prose_json_fallback_currently_permits_structured_success_without_tool_call(self):
+    def test_prose_json_fallback_path_can_accept_success_without_tool_call(self):
+        self.assertFalse(
+            hasattr(child_runner, "json"),
+            "The authoritative head currently leaves the fallback parser inert; Step 6 owns removal.",
+        )
         task_id = "contract-prose-json-fallback"
         register_expectation(task_id, _FALLBACK_SCHEMA)
         try:
-            parsed = _extract_json_from_text(
-                "Result supplied as prose instead of a tool call:\n```json\n{\"ok\": true}\n```"
-            )
+            with patch.object(child_runner, "json", json, create=True):
+                parsed = child_runner._extract_json_from_text(
+                    "Result supplied as prose instead of a tool call:\n"
+                    "```json\n{\"ok\": true}\n```"
+                )
             self.assertEqual(parsed, {"ok": True})
 
             accepted, error = _BROKER.submit(task_id, parsed)
