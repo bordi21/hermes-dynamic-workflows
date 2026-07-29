@@ -16,6 +16,9 @@ hermes-workflows = "hermes_dynamic_workflows.tui.app:main"
 dynamic-workflows = "hermes_dynamic_workflows.entry"
 execution-supervisor = "hermes_execution_supervisor.entry"
 
+[tool.setuptools.packages.find]
+include = ["hermes_dynamic_workflows*", "hermes_execution_supervisor*"]
+
 [tool.setuptools.package-data]
 hermes_dynamic_workflows = ["agents/*.md", "workflows/*.py"]
 
