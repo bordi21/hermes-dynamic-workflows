@@ -471,6 +471,16 @@ class HermesChildAgentRunner(ChildAgentRunner):
                             return result
 
                         captured, _value, tool_attempts = peek_result(lease.task_id)
+                        if not captured:
+                            final_text = str(result.get("final_response") or result.get("content") or "").strip()
+                            if final_text:
+                                parsed_json = _extract_json_from_text(final_text)
+                                if parsed_json is not None:
+                                    from .structured_output import _BROKER
+                                    ok, _err = _BROKER.submit(lease.task_id, parsed_json)
+                                    if ok:
+                                        captured, _value, tool_attempts = peek_result(lease.task_id)
+
                         if captured:
                             return result
 
@@ -1269,3 +1279,28 @@ def _callable_accepts_keyword(target: Any, keyword: str) -> bool:
         if parameter.name == keyword:
             return True
     return False
+
+
+def _extract_json_from_text(text: str) -> Any | None:
+    """Best-effort extraction of JSON payload from child agent text response."""
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(raw[start : end + 1])
+            except Exception:
+                pass
+    return None
