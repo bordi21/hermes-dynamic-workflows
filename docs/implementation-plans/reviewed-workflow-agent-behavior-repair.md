@@ -46,7 +46,7 @@ Additional verified risks include:
 - `toolsets: ["*"]` expands primarily through configured default child toolsets and may not reproduce the safe tool and integration surface available to the launching Hermes session;
 - worker, reviewer, repair, and final prompts are correct at a high level but remain too generic about starting points, stopping conditions, and avoiding lateral exploration;
 - final validation receives an oversized workflow snapshot rather than a purpose-built final-validation packet;
-- the runner currently accepts JSON extracted from final prose as if the mandatory structured-output tool had been called;
+- the runner currently contains a prose-JSON fallback path that can submit parsed JSON as structured output, although the authoritative branch head currently leaves its parser inert because `runner.py` does not import `json`;
 - loop limits operate mostly as terminal timeouts/retry caps rather than detecting repeated non-progress activity;
 - prompt language often assumes a repository or codebase where the actual target may simply be a local Hermes workspace or folder.
 
@@ -54,7 +54,7 @@ Additional verified risks include:
 
 ### Step 1 — Lock the behavioral contract with focused tests
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -82,7 +82,7 @@ Create a failing-first test baseline that describes the desired behavior without
   - profile context and memory remain enabled;
   - task-specific data appears only in the first user message or structured packet.
 - Add tool-surface characterization tests documenting the current difference between `toolsets: ["*"]`, configured defaults, installed plugin tools, and MCP tools.
-- Add a regression test showing that prose JSON fallback currently permits success without a real `structured_output` tool call. This test should be inverted in Step 6.
+- Add a regression test showing that the prose-JSON fallback path can permit success without a real `structured_output` tool call when its parser dependency is present. The authoritative head's missing `json` import is characterized explicitly rather than repaired early. This test should be inverted in Step 6.
 
 #### Likely files
 
@@ -98,11 +98,25 @@ Create a failing-first test baseline that describes the desired behavior without
 - The full existing suite is not required unless focused changes reveal cross-cutting breakage.
 - Update this step to `DONE` with test names and commit SHA.
 
+#### Completion record
+
+- Implementation commits: `42fd3cd2711ab224d633a8986d558733a539917c`, `eb64ecad89f22ef75d1ec6f0ed1b3116e5d315fb`, and `83f5b11c348fa85192af53df8376b312aef7b445`.
+- Changed files:
+  - `tests/test_reviewed_agent_behavior_contract.py`
+  - `tests/test_initial_planning.py`
+- Added coverage for all five canonical role input stacks, fresh child session/profile context boundaries, explicit role packets, planner behavior contracts, wildcard/default/plugin/MCP tool-surface differences, and the prose-JSON structured-output bypass path.
+- Failing-first evidence: GitHub Actions run `30455293788` executed `python -m unittest discover -s tests -v`; Python 3.11 and 3.12 each ran 330 tests and failed on three contract mismatches, exposing the old transport assertion, an overly literal new prompt assertion, and the authoritative fallback parser state.
+- Final result after Step 2 corrections: GitHub Actions run `30455591677`; Python 3.11: 330 tests, `OK`; Python 3.12: 330 tests, `OK`.
+- Residual risks/deferred work:
+  - runtime boundary assertions are repository-level unit/contract tests, not live Hermes proof;
+  - safe plugin/MCP parity remains intentionally deferred to Step 4;
+  - strict removal of the prose fallback remains intentionally deferred to Step 6.
+
 ---
 
 ### Step 2 — Rewrite Initial Orchestrator reasoning instructions and simplify the planning prompt
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -144,6 +158,28 @@ Make the Initial Orchestrator judge decomposition intelligently and stop after p
 - The planner prompt is materially shorter and contains no fake example plan.
 - Existing PlanPackage validation remains fail-closed.
 - Update this step to `DONE` with evidence and commit SHA.
+
+#### Completion record
+
+- Implementation commits: `233919f2fcc6bd070799b8ea0be95c322e68f259`, `b57f90b111e71318b9b486bd968658e87718c1dc`, and test-alignment head `83f5b11c348fa85192af53df8376b312aef7b445`.
+- Changed files:
+  - `hermes_dynamic_workflows/agents/initial-orchestrator.md`
+  - `hermes_dynamic_workflows/actions/planning.py`
+  - `tests/test_initial_planning.py`
+  - `tests/test_reviewed_agent_behavior_contract.py`
+- Implemented behavior:
+  - minimum sufficient, model-owned decomposition with one task for one coherent deliverable;
+  - splitting only for real dependencies, independent scopes/deliverables, materially different expertise/tools, or bounded-attempt size;
+  - no artificial discovery/planning/summarization/verification tasks;
+  - exact paths, read-only empty mutations, operational worker stopping conditions, objective-specific reviewer guidance, minimal retrieval, and workspace-neutral terminology;
+  - transport prompt reduced to the exact objective, cycle, action-owned maxima, ordering constraint, and structured submission requirement;
+  - generated example plan and broad `"."` path/mutation anchors removed;
+  - PlanPackage schema validation, semantic validation, caps, registration, journaling, and notification paths unchanged.
+- Tests executed: GitHub Actions run `30455591677`, command `python -m unittest discover -s tests -v`; Python 3.11: 330 tests in 6.223s, `OK`; Python 3.12: 330 tests, `OK`.
+- Residual risks/deferred work:
+  - no live model canary was run, so model output quality is not claimed beyond the verified prompt and validation contract;
+  - worker/reviewer/repair/final role rewrites remain Step 5;
+  - packet bounding, tool parity, strict structured output, and non-progress controls remain Steps 3, 4, 6, and 7 respectively.
 
 ---
 
