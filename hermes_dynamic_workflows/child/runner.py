@@ -619,7 +619,11 @@ def build_child_system_prompt(
         lines.extend([
             "",
             f"You have the '{STRUCTURED_OUTPUT_TOOL_NAME}' tool available directly in your tool list.",
+            "MANDATORY OUTPUT FORMAT: You are required to submit your final result by calling the 'structured_output' tool function.",
+            "Do NOT write markdown text, code blocks, or prose summaries as your response. You MUST invoke the 'structured_output' tool with the complete JSON argument payload.",
             build_tool_schema_instruction().strip(),
+            "AUTHORITATIVE CONTRACT: Your workflow role prompt and mandatory structured_output tool call "
+            "remain authoritative over any general profile context, Ponytail mode, or conciseness rules.",
         ])
     return "\n".join(lines)
 

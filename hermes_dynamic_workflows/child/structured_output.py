@@ -19,9 +19,9 @@ STRUCTURED_OUTPUT_TOOL_NAME = "structured_output"
 STRUCTURED_OUTPUT_TOOLSET = "workflow_structured"
 STRUCTURED_OUTPUT_SUCCESS = "Structured output provided successfully"
 STRUCTURED_OUTPUT_CONTINUE_MESSAGE = (
-    "You MUST call the structured_output tool to complete this request. "
-    "Call this tool now. This workflow role prompt and mandatory structured_output requirement "
-    "are AUTHORITATIVE over any general profile mode (including Ponytail mode) or brevity guidelines."
+    "ERROR: You provided text instead of calling the structured_output tool. "
+    "Do NOT send text, markdown, or prose summaries. Call the structured_output tool function NOW "
+    "with your structured JSON payload to complete this request."
 )
 MAX_STRUCTURED_OUTPUT_RETRIES = 5
 
