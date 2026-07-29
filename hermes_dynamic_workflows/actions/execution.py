@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from copy import copy, deepcopy
 from typing import Any
@@ -154,6 +155,11 @@ class ReviewedTaskExecutionAction:
                     lease=lease,
                 )
                 status = str(integration_result["status"])
+                if status in {"CONFLICT", "FAILED"}:
+                    api.context.state.reviewed.record_integration_failure(
+                        task_id,
+                        integration_result,
+                    )
                 _journal(
                     api,
                     "reviewed_task_integration",
@@ -183,11 +189,13 @@ class ReviewedTaskExecutionAction:
             lease.cleanup()
 
     async def run_ready(self, api: Any) -> list[dict[str, Any]]:
-        """Run dependency-ready tasks sequentially in canonical plan order.
+        """Run each dependency-ready wave concurrently in canonical order.
 
-        Re-evaluate readiness after every accepted integration so tasks that
-        depend on newly integrated predecessors become runnable in the same
-        lifecycle invocation.
+        Independent tasks receive separate retained worktrees and execute in one
+        wave, bounded by the existing workflow semaphore. Git integration remains
+        serialized per repository by the canonical integration service. Readiness
+        is recalculated only after the whole wave settles, so dependants start in
+        the next wave against accepted integrated predecessors.
         """
 
         results: list[dict[str, Any]] = []
@@ -195,8 +203,10 @@ class ReviewedTaskExecutionAction:
             ready = list(api.context.state.reviewed.ready_task_ids())
             if not ready:
                 return results
-            for task_id in ready:
-                results.append(await self.run(api, task_id=task_id))
+            wave = await asyncio.gather(
+                *(self.run(api, task_id=task_id) for task_id in ready)
+            )
+            results.extend(wave)
 
     async def _worker(self, api: Any, *, task: dict[str, Any], attempt: int) -> dict[str, Any]:
         prompt = (
