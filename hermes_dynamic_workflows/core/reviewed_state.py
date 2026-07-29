@@ -31,7 +31,7 @@ _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "PLANNED": frozenset({"EXECUTING", "SKIPPED"}),
     "EXECUTING": frozenset({"REVIEWING"}),
     "REVIEWING": frozenset({"PASS", "FAIL", "BLOCKED"}),
-    "PASS": frozenset({"INTEGRATED"}),
+    "PASS": frozenset({"INTEGRATED", "FAILED"}),
     "FAIL": frozenset({"REPAIRING", "FAILED"}),
     "REPAIRING": frozenset({"REVIEWING"}),
     "BLOCKED": frozenset(),
@@ -325,6 +325,34 @@ class ReviewedWorkflowState:
                 raise ReviewedStateError(f"task {task.task_id} is already integrated")
             task.integration = deepcopy(integration_value)
             self._transition(task, "INTEGRATED")
+
+    def record_integration_failure(self, task_id: str, integration: dict[str, Any]) -> None:
+        """Persist a failed PASS-only integration and terminalize the task.
+
+        A reviewer PASS authorizes an integration attempt, not a successful merge.
+        Conflicts and mechanical integration failures are evidence-backed task
+        failures and must not leave the lifecycle stranded in nonterminal PASS.
+        """
+
+        integration_value = _require_mapping(integration, "integration result")
+        with self._lock:
+            task = self._task(task_id)
+            if task.status != "PASS":
+                self._illegal_transition(task, "FAILED")
+            if not task.review_verdicts or task.review_verdicts[-1].get("verdict") != "PASS":
+                raise ReviewedStateError(
+                    f"task {task.task_id} cannot record integration failure without a PASS review"
+                )
+            self._validate_result_lineage(task, integration_value)
+            status = integration_value.get("status")
+            if status not in {"CONFLICT", "FAILED"}:
+                raise ReviewedStateError(
+                    f"task {task.task_id} integration failure status must be CONFLICT or FAILED"
+                )
+            if task.integration is not None:
+                raise ReviewedStateError(f"task {task.task_id} already has an integration result")
+            task.integration = deepcopy(integration_value)
+            self._transition(task, "FAILED")
 
     def mark_task_failed(self, task_id: str) -> None:
         with self._lock:
