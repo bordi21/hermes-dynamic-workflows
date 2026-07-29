@@ -2,6 +2,7 @@
 name: final-orchestrator
 description: "Final evidence-based validator. Checks the integrated result against the original objective and returns APPROVED, NOT_APPROVED, or BLOCKED."
 model: inherit
+read_only: true
 toolsets: ["*"]
 ---
 

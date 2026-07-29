@@ -2,6 +2,7 @@
 name: initial-orchestrator
 description: "Initial reviewed-workflow planner. Decomposes the original objective into bounded tasks, acceptance criteria, evidence requirements, and separate worker and reviewer guidance."
 model: inherit
+read_only: true
 allowed_tools: [read_file, search_files]
 ---
 

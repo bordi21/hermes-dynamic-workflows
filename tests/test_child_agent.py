@@ -107,11 +107,27 @@ class ChildAgentTests(unittest.TestCase):
             ["web", "file", "terminal", "skills"],
         )
 
-    def test_explicit_agent_type_does_not_gain_discoverable_toolsets(self):
+    def test_wildcard_agent_type_gains_discoverable_toolsets(self):
         with patch(
             "hermes_dynamic_workflows.child.runner._discoverable_child_toolsets",
             return_value=["mcp-github", "plugin-extra"],
         ):
+            self.assertEqual(
+                _resolve_child_toolsets(
+                    PluginConfig(),
+                    [],
+                    ("*",),
+                    include_discoverable=False,
+                ),
+                [
+                    "web",
+                    "file",
+                    "terminal",
+                    "skills",
+                    "mcp-github",
+                    "plugin-extra",
+                ],
+            )
             self.assertEqual(
                 _resolve_child_toolsets(
                     PluginConfig(),
@@ -309,6 +325,74 @@ class ChildAgentTests(unittest.TestCase):
         self.assertNotIn("write_file", child.valid_tool_names)
         self.assertNotIn("patch", child.valid_tool_names)
 
+    def test_read_only_child_surface_filters_mutation_capabilities(self):
+        definitions = [
+            _tool_definition("read_file"),
+            _tool_definition("search_files"),
+            _tool_definition("write_file"),
+            _tool_definition("patch"),
+            _tool_definition("terminal"),
+            _tool_definition("mcp_github_get_file"),
+            _tool_definition("mcp_github_create_issue"),
+            _tool_definition("plugin_list_items"),
+            _tool_definition("plugin_update_item"),
+            _tool_definition("structured_output"),
+        ]
+
+        model_tools = types.ModuleType("model_tools")
+        model_tools.get_tool_definitions = lambda **kwargs: definitions
+        search_mod = types.ModuleType("tools.tool_search")
+
+        class ToolSearchConfig:
+            @staticmethod
+            def from_raw(raw):
+                return raw
+
+        def assemble_tool_defs(tool_defs, *, config):
+            return types.SimpleNamespace(tool_defs=tool_defs)
+
+        search_mod.ToolSearchConfig = ToolSearchConfig
+        search_mod.assemble_tool_defs = assemble_tool_defs
+        tools_pkg = types.ModuleType("tools")
+        tools_pkg.__path__ = []
+        tools_pkg.tool_search = search_mod
+
+        class Child:
+            tools = []
+            valid_tool_names = set()
+            enabled_toolsets = []
+
+        child = Child()
+        with patch.dict(
+            sys.modules,
+            {
+                "model_tools": model_tools,
+                "tools": tools_pkg,
+                "tools.tool_search": search_mod,
+            },
+        ):
+            _configure_child_tools(
+                child,
+                toolsets=["file", "terminal", "mcp-github", "plugin-extra"],
+                blocked_toolsets=PluginConfig().blocked_child_toolsets,
+                read_only=True,
+            )
+
+        self.assertEqual(
+            child.valid_tool_names,
+            {
+                "read_file",
+                "search_files",
+                "mcp_github_get_file",
+                "plugin_list_items",
+                "structured_output",
+            },
+        )
+        self.assertNotIn("write_file", child.valid_tool_names)
+        self.assertNotIn("patch", child.valid_tool_names)
+        self.assertNotIn("terminal", child.valid_tool_names)
+        self.assertNotIn("mcp_github_create_issue", child.valid_tool_names)
+        self.assertNotIn("plugin_update_item", child.valid_tool_names)
     def test_system_prompt_includes_agent_type_instructions(self):
         prompt = build_child_system_prompt(
             AgentTypeSpec(

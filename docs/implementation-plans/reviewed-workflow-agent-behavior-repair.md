@@ -185,7 +185,7 @@ Make the Initial Orchestrator judge decomposition intelligently and stop after p
 
 ### Step 3 — Make handoff packets and conversation boundaries explicit
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -220,11 +220,45 @@ Ensure every role sees exactly the information required for its responsibility w
 - Final validation no longer receives irrelevant full-run data when a bounded packet is sufficient.
 - Update this step to `DONE` with evidence and commit SHA.
 
+
+#### Completion record
+
+- Resulting commit: this implementation-and-plan commit; its exact SHA is recorded in branch history and the execution report because a commit cannot contain its own final SHA.
+- Changed files:
+  - `hermes_dynamic_workflows/child/runner.py`
+  - `hermes_dynamic_workflows/child/presets.py`
+  - `hermes_dynamic_workflows/actions/execution.py`
+  - `hermes_dynamic_workflows/actions/final_validation.py`
+  - `hermes_dynamic_workflows/agents/initial-orchestrator.md`
+  - `hermes_dynamic_workflows/agents/reviewer.md`
+  - `hermes_dynamic_workflows/agents/final-orchestrator.md`
+  - `tests/test_child_agent.py`
+  - `tests/test_reviewed_agent_behavior_contract.py`
+  - `tests/test_reviewed_task_execution.py`
+  - `tests/test_final_validation_action.py`
+  - `docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md`
+- Implemented behavior:
+  - explicit worker, reviewer, repair, and final-validation request packets;
+  - fresh child sessions retain profile context and memory while parent and sibling transcripts remain absent;
+  - reviewer handoff contains only its TaskPackage, WorkerResultPackage, planner guidance, and current workspace evidence;
+  - final validation receives bounded terminal summaries, latest attempt and verdict evidence, accepted integrations, unresolved outcomes, and remaining cycle count instead of the complete run snapshot;
+  - labels, phases, and workspace display metadata remain transport and telemetry rather than packet scope.
+- Focused tests:
+  - `tests/test_child_agent.py`: 58 tests in 0.122s, OK.
+  - `tests/test_reviewed_agent_behavior_contract.py`: 9 tests in 0.058s, OK.
+  - `tests/test_reviewed_task_execution.py`: 9 tests in 0.338s, OK.
+  - `tests/test_final_validation_action.py`: 9 tests in 0.194s, OK.
+- Broader regression suite, required because child tool resolution and agent preset parsing are cross-cutting: `python -m unittest discover -s tests -v` — 334 tests in 6.236s, OK.
+- Residual risks/deferred work:
+  - repository tests prove assembly and isolation contracts, not live model behavior;
+  - strict mandatory structured-output enforcement remains Step 6;
+  - role retrieval and stopping instruction rewrites remain Step 5.
+
 ---
 
 ### Step 4 — Align child tools, skills, permissions, and workspace semantics with Hermes
 
-Status: TODO
+Status: DONE
 
 #### Goal
 
@@ -259,6 +293,40 @@ Make a workflow child capable of executing the same scoped prompt as a manually 
 - Safety and approval governance remain unchanged.
 - Workspace wording and behavior no longer require the user objective to describe a repository.
 - Update this step to `DONE` with evidence and commit SHA.
+
+
+#### Completion record
+
+- Resulting commit: this implementation-and-plan commit; its exact SHA is recorded in branch history and the execution report because a commit cannot contain its own final SHA.
+- Changed files:
+  - `hermes_dynamic_workflows/child/runner.py`
+  - `hermes_dynamic_workflows/child/presets.py`
+  - `hermes_dynamic_workflows/actions/execution.py`
+  - `hermes_dynamic_workflows/actions/final_validation.py`
+  - `hermes_dynamic_workflows/agents/initial-orchestrator.md`
+  - `hermes_dynamic_workflows/agents/reviewer.md`
+  - `hermes_dynamic_workflows/agents/final-orchestrator.md`
+  - `tests/test_child_agent.py`
+  - `tests/test_reviewed_agent_behavior_contract.py`
+  - `tests/test_reviewed_task_execution.py`
+  - `tests/test_final_validation_action.py`
+  - `docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md`
+- Implemented behavior:
+  - `toolsets: ["*"]` now expands configured defaults plus safe discoverable plugin and MCP toolsets for Worker and Repair Worker;
+  - blocked toolsets, recursive orchestration exclusions, model routing, approvals, command guards, hardline restrictions, runtime integrations, and canonical registry and Tool Search remain in force;
+  - read-only roles declare explicit capability policy and receive a fail-closed read-only tool surface, including lazily discoverable read-only plugin and MCP tools while mutation-capable tools are withheld;
+  - read-only tasks use Hermes' supported shared-workspace mode; mutation tasks continue to require Git worktree isolation and fail clearly when it cannot be created;
+  - task language uses workspace semantics while Git terminology remains limited to actual isolation and integration behavior.
+- Focused tests:
+  - `tests/test_child_agent.py`: 58 tests in 0.122s, OK.
+  - `tests/test_reviewed_agent_behavior_contract.py`: 9 tests in 0.058s, OK.
+  - `tests/test_reviewed_task_execution.py`: 9 tests in 0.338s, OK.
+  - `tests/test_final_validation_action.py`: 9 tests in 0.194s, OK.
+- Broader regression suite, required because child tool resolution and agent preset parsing are cross-cutting: `python -m unittest discover -s tests -v` — 334 tests in 6.236s, OK.
+- Residual risks/deferred work:
+  - plugin and MCP tools do not expose a canonical mutability flag, so unknown tools are filtered fail-closed by explicit safe names and read or mutation action tokens; unusual read-only names may require future classification;
+  - non-Git mutation execution remains unsupported and fails clearly rather than claiming integration;
+  - no live Hermes canary, installation, or provider-specific capability test was run.
 
 ---
 

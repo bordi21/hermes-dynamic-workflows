@@ -19,6 +19,7 @@ class AgentTypeSpec:
     toolsets: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
+    read_only: bool = False
     model: str | None = None
     isolation: str | None = None
 
@@ -167,6 +168,7 @@ def _load_markdown_agent_type(name: str, path: Path) -> AgentTypeSpec:
         toolsets=_as_tuple(frontmatter.get("toolsets") or frontmatter.get("tools")),
         allowed_tools=_as_tuple(frontmatter.get("allowed_tools")),
         disallowed_tools=_as_tuple(frontmatter.get("disallowed_tools")),
+        read_only=_as_bool(frontmatter.get("read_only")),
         model=_as_optional_str(frontmatter.get("model")),
         isolation=_as_optional_str(frontmatter.get("isolation")),
     )
@@ -193,6 +195,7 @@ def _load_structured_agent_type(name: str, path: Path, data: Any) -> AgentTypeSp
         toolsets=_as_tuple(data.get("toolsets") or data.get("tools")),
         allowed_tools=_as_tuple(data.get("allowed_tools")),
         disallowed_tools=_as_tuple(data.get("disallowed_tools")),
+        read_only=_as_bool(data.get("read_only")),
         model=_as_optional_str(data.get("model")),
         isolation=_as_optional_str(data.get("isolation")),
     )
@@ -268,6 +271,12 @@ def _as_tuple(value: Any) -> tuple[str, ...]:
 def _description_from(data: dict[str, Any]) -> str:
     description = str(data.get("description") or data.get("whenToUse") or "").strip()
     return description.replace("\\n", "\n").replace('\\"', '"')
+
+
+def _as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _as_optional_str(value: Any) -> str | None:

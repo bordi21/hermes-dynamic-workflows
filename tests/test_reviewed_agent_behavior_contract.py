@@ -101,6 +101,11 @@ class CanonicalRoleInputContractTests(unittest.TestCase):
         self.assertIn("conversation_history=history", conversation_source)
         self.assertNotIn("parent conversation", build_source.lower())
 
+    def test_read_only_roles_declare_capability_policy(self):
+        for role in ("initial-orchestrator", "reviewer", "final-orchestrator"):
+            with self.subTest(role=role):
+                text = (_AGENTS_ROOT / f"{role}.md").read_text(encoding="utf-8")
+                self.assertIn("read_only: true", text.split("\n---\n", 1)[0])
     def test_role_packets_are_explicit_and_role_specific(self):
         from hermes_dynamic_workflows.actions import execution, final_validation
 
@@ -108,13 +113,14 @@ class CanonicalRoleInputContractTests(unittest.TestCase):
         final_source = inspect.getsource(final_validation._validation_prompt)
         planning_source = inspect.getsource(InitialPlanningAction.run)
 
-        self.assertIn("TaskPackage", execution_source)
-        self.assertIn("RepairPackage", execution_source)
-        self.assertIn("ReviewRequestPackage", execution_source)
+        self.assertIn("WorkerRequestPacket", execution_source)
+        self.assertIn("RepairRequestPacket", execution_source)
+        self.assertIn("ReviewRequestPacket", execution_source)
         self.assertIn('"agentType": "worker"', execution_source)
         self.assertIn('"agentType": "reviewer"', execution_source)
         self.assertIn('"agentType": "repair-worker"', execution_source)
-        self.assertIn("Current PlanPackage", final_source)
+        self.assertIn("FinalValidationPacket", final_source)
+        self.assertNotIn("Complete reviewed workflow snapshot", final_source)
         self.assertIn('"agentType": "initial-orchestrator"', planning_source)
 
 
@@ -165,7 +171,7 @@ class InitialPlannerBehaviorContractTests(unittest.TestCase):
 
 
 class ToolAndStructuredOutputCharacterizationTests(unittest.TestCase):
-    def test_wildcard_currently_expands_defaults_not_discoverable_plugin_or_mcp_tools(self):
+    def test_wildcard_expands_defaults_and_discoverable_plugin_or_mcp_tools(self):
         config = SimpleNamespace(
             default_child_toolsets=("file", "terminal"),
             blocked_child_toolsets=("workflow",),
@@ -180,18 +186,18 @@ class ToolAndStructuredOutputCharacterizationTests(unittest.TestCase):
                 ("*",),
                 include_discoverable=False,
             )
-            anonymous = _resolve_child_toolsets(
+            explicit = _resolve_child_toolsets(
                 config,
                 [],
-                (),
-                include_discoverable=True,
+                ("file",),
+                include_discoverable=False,
             )
 
-        self.assertEqual(wildcard, ["file", "terminal"])
         self.assertEqual(
-            anonymous,
+            wildcard,
             ["file", "terminal", "mcp-demo", "plugin-demo"],
         )
+        self.assertEqual(explicit, ["file"])
 
     def test_prose_json_fallback_path_can_accept_success_without_tool_call(self):
         self.assertFalse(

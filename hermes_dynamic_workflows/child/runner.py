@@ -43,6 +43,113 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _CHILD_EXCLUDED_TOOL_NAMES = frozenset({"skill_manage"})
+_READ_ONLY_TOOL_NAMES = frozenset(
+    {
+        "browser_back",
+        "browser_console",
+        "browser_get_images",
+        "browser_navigate",
+        "browser_scroll",
+        "browser_snapshot",
+        "browser_vision",
+        "read_file",
+        "read_terminal",
+        "search_files",
+        "session_search",
+        "skill_view",
+        "skills_list",
+        "structured_output",
+        "video_analyze",
+        "vision_analyze",
+        "web_extract",
+        "web_search",
+        "x_search",
+    }
+)
+_READ_ONLY_NAME_TOKENS = frozenset(
+    {
+        "analyze",
+        "check",
+        "console",
+        "describe",
+        "diff",
+        "extract",
+        "fetch",
+        "find",
+        "get",
+        "history",
+        "inspect",
+        "list",
+        "log",
+        "lookup",
+        "poll",
+        "query",
+        "read",
+        "search",
+        "show",
+        "snapshot",
+        "status",
+        "view",
+        "wait",
+    }
+)
+_MUTATING_NAME_TOKENS = frozenset(
+    {
+        "add",
+        "approve",
+        "assign",
+        "block",
+        "close",
+        "comment",
+        "complete",
+        "create",
+        "delete",
+        "deploy",
+        "dispatch",
+        "edit",
+        "execute",
+        "install",
+        "invite",
+        "kill",
+        "label",
+        "link",
+        "lock",
+        "manage",
+        "merge",
+        "move",
+        "patch",
+        "play",
+        "post",
+        "publish",
+        "push",
+        "put",
+        "react",
+        "reject",
+        "remove",
+        "rename",
+        "reply",
+        "restart",
+        "resume",
+        "run",
+        "save",
+        "schedule",
+        "send",
+        "set",
+        "start",
+        "stop",
+        "submit",
+        "switch",
+        "transfer",
+        "trigger",
+        "unblock",
+        "uninstall",
+        "unlock",
+        "update",
+        "upload",
+        "vote",
+        "write",
+    }
+)
 
 
 class _WorkflowApprovalCoordinator:
@@ -190,8 +297,9 @@ class HermesChildAgentRunner(ChildAgentRunner):
                 toolsets=toolsets,
                 blocked_toolsets=self.config.blocked_child_toolsets,
                 allowed_tools=agent_type.allowed_tools if agent_type else (),
-                disallowed_tools=agent_type.disallowed_tools if agent_type else (),
-            )
+                    disallowed_tools=agent_type.disallowed_tools if agent_type else (),
+                    read_only=bool(agent_type.read_only) if agent_type else False,
+                )
             if structured_tool:
                 child.tools = specialize_structured_output_tool(child.tools, request.schema)
                 child.valid_tool_names.add(STRUCTURED_OUTPUT_TOOL_NAME)
@@ -679,11 +787,11 @@ def _resolve_child_toolsets(
     include_discoverable: bool = False,
 ) -> list[str]:
     raw = requested or list(agent_type_toolsets) or list(config.default_child_toolsets)
-    # "*" expands to all default child toolsets (like general-purpose)
-    if "*" in raw:
+    wildcard_requested = "*" in raw
+    if wildcard_requested:
         wildcard = [ts for ts in config.default_child_toolsets if ts not in raw]
         raw = [item for item in raw if item != "*"] + wildcard
-    if include_discoverable:
+    if include_discoverable or wildcard_requested:
         raw = list(raw) + _discoverable_child_toolsets(config)
     blocked = set(config.blocked_child_toolsets)
     cleaned: list[str] = []
@@ -733,6 +841,7 @@ def _configure_child_tools(
     blocked_toolsets: tuple[str, ...],
     allowed_tools: tuple[str, ...] = (),
     disallowed_tools: tuple[str, ...] = (),
+    read_only: bool = False,
 ) -> None:
     """Apply the workflow-child tool surface and force native Tool Search."""
     try:
@@ -749,6 +858,7 @@ def _configure_child_tools(
             definitions,
             allowed_tools=allowed_tools,
             disallowed_tools=disallowed_tools,
+            read_only=read_only,
         )
         direct: list[dict[str, Any]] = []
         searchable: list[dict[str, Any]] = []
@@ -779,6 +889,7 @@ def _configure_child_tools(
             ],
             allowed_tools=allowed_tools,
             disallowed_tools=disallowed_tools,
+            read_only=read_only,
         )
 
     child.valid_tool_names = {
@@ -801,6 +912,7 @@ def _filter_child_tool_definitions(
     *,
     allowed_tools: tuple[str, ...] = (),
     disallowed_tools: tuple[str, ...] = (),
+    read_only: bool = False,
 ) -> list[dict[str, Any]]:
     allowed = {name for item in allowed_tools if (name := str(item).strip())}
     disallowed = {name for item in disallowed_tools if (name := str(item).strip())}
@@ -815,8 +927,28 @@ def _filter_child_tool_definitions(
             continue
         if name in disallowed:
             continue
+        if read_only and not _is_read_only_tool_definition(definition):
+            continue
         filtered.append(definition)
     return filtered
+
+
+def _is_read_only_tool_definition(definition: Any) -> bool:
+    # Capability filtering stays on Hermes' canonical definitions and registry.
+    name = _tool_definition_name(definition)
+    if not name:
+        return False
+    folded = name.casefold()
+    if folded in _READ_ONLY_TOOL_NAMES:
+        return True
+    tokens = {
+        token
+        for token in re.split(r"[^a-z0-9]+", folded)
+        if token
+    }
+    if tokens.intersection(_MUTATING_NAME_TOKENS):
+        return False
+    return bool(tokens.intersection(_READ_ONLY_NAME_TOKENS))
 
 
 def _tool_definition_name(definition: Any) -> str:

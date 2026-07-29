@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import dataclass, field
 from typing import Any
 
-from hermes_dynamic_workflows.actions.final_validation import FinalValidationAction
+from hermes_dynamic_workflows.actions.final_validation import (
+    FinalValidationAction,
+    _final_validation_packet,
+)
 from hermes_dynamic_workflows.core.errors import ReviewedStateError
 from hermes_dynamic_workflows.core.types import WorkflowFrame, WorkflowState
 
@@ -163,6 +167,37 @@ def _finish_task(api: _API, task_id: str, *, outcome: str = "INTEGRATED") -> Non
 
 
 class FinalValidationActionTests(unittest.IsolatedAsyncioTestCase):
+    def test_final_packet_keeps_only_latest_attempt_and_bounded_lineage(self):
+        task_state = {
+            "task_id": "A",
+            "status": "FAILED",
+            "task": _task("A"),
+            "worker_attempts": [
+                {"attempt": 1, "summary": "old"},
+                {"attempt": 2, "summary": "latest"},
+            ],
+            "review_verdicts": [
+                {"attempt": 1, "verdict": "FAIL"},
+                {"attempt": 2, "verdict": "FAIL"},
+            ],
+            "repair_attempts": [{"repair": {"repair_attempt": 1}}],
+            "integration": None,
+            "skip_reason": None,
+        }
+
+        packet = _final_validation_packet(
+            plan=_plan(),
+            task_states=[task_state],
+            remaining_cycles=1,
+        )
+
+        terminal = packet["terminal_tasks"][0]
+        self.assertEqual(terminal["latest_worker_result"]["attempt"], 2)
+        self.assertEqual(terminal["latest_review_verdict"]["attempt"], 2)
+        self.assertEqual(terminal["repair_attempts_used"], 1)
+        self.assertNotIn("worker_attempts", terminal)
+        self.assertNotIn("review_verdicts", terminal)
+        self.assertEqual(packet["unresolved_outcomes"][0]["status"], "FAILED")
     async def test_approved_records_terminal_validation_without_replan(self):
         api = _API(_validation("APPROVED"))
         api.context.state.reviewed.register_plan(_plan())
@@ -174,7 +209,15 @@ class FinalValidationActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["next_plan"])
         self.assertEqual(len(api.calls), 1)
         prompt, opts = api.calls[0]
-        self.assertIn("Validate the integrated project state", prompt)
+        self.assertIn("Validate the current workspace state", prompt)
+        self.assertIn("FinalValidationPacket", prompt)
+        self.assertNotIn("Complete reviewed workflow snapshot", prompt)
+        packet = json.loads(prompt.split("FinalValidationPacket:\n", 1)[1])
+        self.assertEqual(packet["original_objective"], OBJECTIVE)
+        self.assertEqual(packet["final_validation_criteria"], CRITERIA)
+        self.assertEqual(len(packet["terminal_tasks"]), 1)
+        self.assertEqual(len(packet["accepted_integrations"]), 1)
+        self.assertEqual(packet["unresolved_outcomes"], [])
         self.assertEqual(opts["agentType"], "final-orchestrator")
         self.assertNotIn("isolation", opts)
         snapshot = api.context.state.reviewed.snapshot()

@@ -2,6 +2,7 @@
 name: reviewer
 description: "Evidence-gated task reviewer. Evaluates one worker attempt against planner-authored criteria and returns PASS, FAIL, or BLOCKED."
 model: inherit
+read_only: true
 toolsets: ["*"]
 ---
 

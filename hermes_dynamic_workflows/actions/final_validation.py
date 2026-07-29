@@ -39,7 +39,6 @@ class FinalValidationAction:
         remaining_cycles = max(0, max_cycles - cycle)
 
         prompt = _validation_prompt(
-            snapshot=snapshot,
             plan=plan,
             task_states=task_states,
             remaining_cycles=remaining_cycles,
@@ -174,23 +173,25 @@ def _select_terminal_cycle(
 
 def _validation_prompt(
     *,
-    snapshot: dict[str, Any],
     plan: dict[str, Any],
     task_states: list[dict[str, Any]],
     remaining_cycles: int,
 ) -> str:
+    packet = _final_validation_packet(
+        plan=plan,
+        task_states=task_states,
+        remaining_cycles=remaining_cycles,
+    )
     return (
-        "Validate the integrated project state against the original objective and every "
-        "final validation criterion. Operate read-only and inspect the current checkout, "
-        "tests, persisted task lineage, worker evidence, reviewer verdicts, repairs, "
-        "integrations, failures, and blockers. Return only the required "
+        "Validate the current workspace state against the original objective and every "
+        "final validation criterion. Operate read-only and inspect only the supplied "
+        "terminal evidence plus relevant current workspace state. Return only the required "
         "FinalValidationPackage through structured output.\n\n"
         "Requirement results must appear in exactly the same order and use exactly the "
         "same requirement strings as final_validation_criteria. APPROVED requires every "
         "requirement to be satisfied and delta_tasks to be empty. BLOCKED requires a "
         "specific external blocker and delta_tasks to be empty. NOT_APPROVED requires at "
         "least one concrete gap.\n\n"
-        f"Remaining replanning cycles: {remaining_cycles}\n"
         + (
             "For NOT_APPROVED, create a non-empty, focused delta_tasks array. Every delta "
             "task must use the same new plan_id, different from the current plan_id. A delta "
@@ -199,10 +200,66 @@ def _validation_prompt(
             else "No replanning cycles remain. For NOT_APPROVED, delta_tasks must be empty."
         )
         + "\n\n"
-        f"Current PlanPackage:\n{_json(plan)}\n\n"
-        f"Current cycle task states:\n{_json(task_states)}\n\n"
-        f"Complete reviewed workflow snapshot:\n{_json(snapshot)}"
+        f"FinalValidationPacket:\n{_json(packet)}"
     )
+
+
+def _final_validation_packet(
+    *,
+    plan: dict[str, Any],
+    task_states: list[dict[str, Any]],
+    remaining_cycles: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0",
+        "plan_id": plan["plan_id"],
+        "cycle": plan["cycle"],
+        "original_objective": plan["original_objective"],
+        "final_validation_criteria": deepcopy(plan["final_validation_criteria"]),
+        "remaining_replanning_cycles": remaining_cycles,
+        "terminal_tasks": [
+            _terminal_task_summary(item) for item in task_states
+        ],
+        "accepted_integrations": [
+            deepcopy(item["integration"])
+            for item in task_states
+            if item.get("status") == "INTEGRATED"
+            and isinstance(item.get("integration"), dict)
+        ],
+        "unresolved_outcomes": [
+            {
+                "task_id": item["task_id"],
+                "status": item["status"],
+                "latest_review_verdict": deepcopy(
+                    (item.get("review_verdicts") or [None])[-1]
+                ),
+                "skip_reason": item.get("skip_reason"),
+            }
+            for item in task_states
+            if item.get("status") != "INTEGRATED"
+        ],
+    }
+
+
+def _terminal_task_summary(task_state: dict[str, Any]) -> dict[str, Any]:
+    task = task_state.get("task") or {}
+    worker_attempts = task_state.get("worker_attempts") or []
+    review_verdicts = task_state.get("review_verdicts") or []
+    return {
+        "task_id": task_state["task_id"],
+        "objective": task.get("objective"),
+        "status": task_state["status"],
+        "acceptance_criteria": deepcopy(task.get("acceptance_criteria") or []),
+        "latest_worker_result": (
+            deepcopy(worker_attempts[-1]) if worker_attempts else None
+        ),
+        "latest_review_verdict": (
+            deepcopy(review_verdicts[-1]) if review_verdicts else None
+        ),
+        "repair_attempts_used": len(task_state.get("repair_attempts") or []),
+        "integration": deepcopy(task_state.get("integration")),
+        "skip_reason": task_state.get("skip_reason"),
+    }
 
 
 def _validate_final_validation(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -102,7 +103,7 @@ class _Lease:
 
     def review_context(self) -> WorkspaceReviewContext:
         return WorkspaceReviewContext(
-            mode="worktree",
+            mode="worktree" if self.isolation == "worktree" else "shared",
             workspace=self.cwd,
             repo_root=self.repo_root,
             branch=self.branch,
@@ -219,6 +220,34 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(call["cwd"] == lease.cwd for call in api.calls))
         self.assertTrue(all("isolation" not in call["opts"] for call in api.calls))
         self.assertIn('"workspace": "/tmp/A-workspace"', api.calls[1]["prompt"])
+        worker_packet = json.loads(
+            api.calls[0]["prompt"].split("WorkerRequestPacket:\n", 1)[1]
+        )
+        self.assertEqual(set(worker_packet), {"schema_version", "task", "attempt"})
+        self.assertEqual(worker_packet["task"]["task_id"], "A")
+        self.assertEqual(worker_packet["attempt"], 1)
+
+        review_prompt = api.calls[1]["prompt"]
+        self.assertNotIn("WorkspaceReviewContext", review_prompt)
+        review_packet = json.loads(
+            review_prompt.split("ReviewRequestPacket:\n", 1)[1]
+        )
+        self.assertEqual(
+            set(review_packet),
+            {
+                "schema_version",
+                "plan_id",
+                "task_id",
+                "task",
+                "worker_result",
+                "workspace_evidence",
+            },
+        )
+        self.assertNotIn("original_objective", review_packet)
+        self.assertEqual(
+            review_packet["workspace_evidence"]["workspace"],
+            "/tmp/A-workspace",
+        )
         factory.assert_called_once_with(
             cwd="/repo",
             isolation="worktree",
@@ -252,8 +281,15 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(all(call["cwd"] == lease.cwd for call in api.calls))
         repair_prompt = api.calls[2]["prompt"]
-        self.assertIn('"repair_attempt": 1', repair_prompt)
-        self.assertIn('"verdict": "FAIL"', repair_prompt)
+        repair_packet = json.loads(
+            repair_prompt.split("RepairRequestPacket:\n", 1)[1]
+        )
+        self.assertEqual(repair_packet["worker_attempt"], 2)
+        self.assertEqual(repair_packet["repair"]["repair_attempt"], 1)
+        self.assertEqual(
+            repair_packet["repair"]["review_verdict"]["verdict"],
+            "FAIL",
+        )
         task = api.context.state.reviewed.snapshot()["tasks"][0]
         self.assertEqual(task["status"], "INTEGRATED")
         self.assertEqual([item["attempt"] for item in task["worker_attempts"]], [1, 2])
@@ -333,6 +369,34 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
                 await ReviewedTaskExecutionAction().run(wrong, task_id="A")
         self.assertEqual(wrong.context.state.reviewed.snapshot()["tasks"][0]["status"], "EXECUTING")
         self.assertEqual(lease.cleanup_calls, 1)
+
+    async def test_read_only_task_uses_supported_shared_workspace_mode(self):
+        task = _task()
+        task["allowed_mutations"] = []
+        api = _API([_worker(attempt=1), _review(attempt=1)])
+        api.context.state.reviewed.register_plan(_plan(task))
+        lease = _Lease(
+            isolation="shared",
+            path=None,
+            branch=None,
+            repo_root=None,
+        )
+
+        with patch(
+            "hermes_dynamic_workflows.actions.execution.create_workspace_lease",
+            return_value=lease,
+        ) as factory:
+            result = await ReviewedTaskExecutionAction().run(api, task_id="A")
+
+        self.assertEqual(result["status"], "INTEGRATED")
+        factory.assert_called_once_with(
+            cwd="/repo",
+            isolation="shared",
+            label="reviewed-A",
+            task_id="reviewed-plan-1-A",
+            keep_worktree=False,
+        )
+        self.assertTrue(all(call["cwd"] == lease.cwd for call in api.calls))
 
     async def test_workspace_scope_failure_cleans_lease_before_state_start(self):
         api = _BrokenScopedAPI([])

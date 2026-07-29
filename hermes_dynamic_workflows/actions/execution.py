@@ -21,11 +21,11 @@ from ..engine.integration import integrate_reviewed_workspace, reviewed_workspac
 class ReviewedTaskExecutionAction:
     """Execute one ready task through review, bounded repair, and integration.
 
-    The action owns the concrete task worktree for the entire lifecycle. Every
-    child still runs through ``WorkflowAPI.agent`` so routing, approvals,
+    The action owns the concrete task workspace for the entire lifecycle. Mutation
+    tasks use one retained Git worktree; read-only tasks use the launch workspace.
+    Every child still runs through ``WorkflowAPI.agent`` so routing, approvals,
     structured output, accounting, transcripts, and runtime limits remain
-    canonical. Workers, reviewers, and fresh repair sessions all operate on the
-    same isolated workspace; only an evidence-backed PASS is integrated.
+    canonical. Only an evidence-backed PASS is accepted.
     """
 
     async def run(self, api: Any, *, task_id: str) -> dict[str, Any]:
@@ -209,11 +209,16 @@ class ReviewedTaskExecutionAction:
             results.extend(wave)
 
     async def _worker(self, api: Any, *, task: dict[str, Any], attempt: int) -> dict[str, Any]:
+        request = {
+            "schema_version": "1.0",
+            "task": deepcopy(task),
+            "attempt": attempt,
+        }
         prompt = (
-            "Execute exactly this reviewed-workflow TaskPackage inside the current isolated task "
-            "workspace. Return only the required WorkerResultPackage through structured output. "
-            "Do not self-review or broaden scope.\n\n"
-            f"Attempt: {attempt}\nTaskPackage:\n{_json(task)}"
+            "Execute exactly the supplied TaskPackage in the current workspace. Return only "
+            "the required WorkerResultPackage through structured output. Do not self-review or "
+            "broaden scope.\n\n"
+            f"WorkerRequestPacket:\n{_json(request)}"
         )
         result = await api.agent(
             prompt,
@@ -238,7 +243,7 @@ class ReviewedTaskExecutionAction:
             "Start a fresh repair-agent session in the retained task workspace. Perform a "
             "materially different repair using this RepairPackage, preserve the original criteria, "
             "and return only a WorkerResultPackage through structured output.\n\n"
-            f"Worker attempt: {attempt}\nRepairPackage:\n{_json(repair)}"
+            f"RepairRequestPacket:\n{_json({'repair': repair, 'worker_attempt': attempt})}"
         )
         result = await api.agent(
             prompt,
@@ -265,18 +270,16 @@ class ReviewedTaskExecutionAction:
             "schema_version": "1.0",
             "plan_id": task["plan_id"],
             "task_id": task["task_id"],
-            "original_objective": plan["original_objective"],
             "task": deepcopy(task),
             "worker_result": deepcopy(result),
+            "workspace_evidence": reviewed_workspace_context(lease),
         }
-        workspace = reviewed_workspace_context(lease)
         prompt = (
             "Review this attempt fail-closed against every acceptance criterion and the planner's "
             "reviewer guidelines. Inspect the current task workspace and its concrete diff evidence, "
             "not only the worker's claims. Return PASS, FAIL, or BLOCKED only through the required "
             "ReviewVerdictPackage. Do not repair the work.\n\n"
-            f"ReviewRequestPackage:\n{_json(request)}\n\n"
-            f"WorkspaceReviewContext:\n{_json(workspace)}"
+            f"ReviewRequestPacket:\n{_json(request)}"
         )
         verdict = await api.agent(
             prompt,
@@ -298,17 +301,19 @@ class ReviewedTaskExecutionAction:
 
 
 def _create_task_workspace(api: Any, task: dict[str, Any]) -> WorkspaceLease:
+    isolation = "worktree" if task.get("allowed_mutations") else "shared"
     try:
         return create_workspace_lease(
             cwd=api.frame.cwd,
-            isolation="worktree",
+            isolation=isolation,
             label=f"reviewed-{task['task_id']}",
             task_id=f"reviewed-{task['plan_id']}-{task['task_id']}",
             keep_worktree=bool(getattr(getattr(api, "config", None), "keep_worktrees", False)),
         )
     except (OSError, ValueError) as exc:
+        mode = "isolated Git workspace" if isolation == "worktree" else "shared workspace"
         raise ReviewedStateError(
-            f"could not create isolated workspace for task {task['task_id']}: {exc}"
+            f"could not create {mode} for task {task['task_id']}: {exc}"
         ) from exc
 
 
