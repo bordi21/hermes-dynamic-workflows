@@ -1,0 +1,66 @@
+name: Apply reviewed workflow steps 3 and 4
+
+on:
+  push:
+    branches:
+      - plan/reviewed-workflow-agent-behavior
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: plan/reviewed-workflow-agent-behavior
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Apply, verify, and commit
+        env:
+          BASE_HEAD: 49d0151319f9e60fb0a1b5cfe1fd5d2cc0231821
+          PUSH_HEAD: ${{ github.sha }}
+          TARGET_BRANCH: plan/reviewed-workflow-agent-behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .github/apply_steps_3_4.py /tmp/apply_steps_3_4.py
+          git reset --hard "$BASE_HEAD"
+
+          python /tmp/apply_steps_3_4.py apply
+          python -m pip install -e .
+
+          mkdir -p /tmp/reviewed-tests
+          python -m unittest discover -s tests -p 'test_child_agent.py' -v 2>&1 | tee /tmp/reviewed-tests/test_child_agent.log
+          python -m unittest discover -s tests -p 'test_reviewed_agent_behavior_contract.py' -v 2>&1 | tee /tmp/reviewed-tests/test_reviewed_agent_behavior_contract.log
+          python -m unittest discover -s tests -p 'test_reviewed_task_execution.py' -v 2>&1 | tee /tmp/reviewed-tests/test_reviewed_task_execution.log
+          python -m unittest discover -s tests -p 'test_final_validation_action.py' -v 2>&1 | tee /tmp/reviewed-tests/test_final_validation_action.log
+          python -m unittest discover -s tests -v 2>&1 | tee /tmp/reviewed-tests/full.log
+
+          python /tmp/apply_steps_3_4.py plan /tmp/reviewed-tests
+          git diff --check
+          git status --short
+
+          git config user.name "Hermes Workflow Architect"
+          git config user.email "workflow-architect@users.noreply.github.com"
+          git add \
+            hermes_dynamic_workflows/child/runner.py \
+            hermes_dynamic_workflows/child/presets.py \
+            hermes_dynamic_workflows/actions/execution.py \
+            hermes_dynamic_workflows/actions/final_validation.py \
+            hermes_dynamic_workflows/agents/initial-orchestrator.md \
+            hermes_dynamic_workflows/agents/reviewer.md \
+            hermes_dynamic_workflows/agents/final-orchestrator.md \
+            tests/test_child_agent.py \
+            tests/test_reviewed_agent_behavior_contract.py \
+            tests/test_reviewed_task_execution.py \
+            tests/test_final_validation_action.py \
+            docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md
+          git commit -m "feat(reviewed-workflow): isolate handoffs and align child capabilities"
+          git push --force-with-lease="refs/heads/$TARGET_BRANCH:$PUSH_HEAD" origin "HEAD:refs/heads/$TARGET_BRANCH"
