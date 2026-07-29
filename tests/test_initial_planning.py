@@ -85,7 +85,7 @@ class InitialPlanningActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(result, expected)
         self.assertEqual(len(api.calls), 1)
         prompt, opts = api.calls[0]
-        self.assertIn("Do not execute, review, repair, or integrate", prompt)
+        self.assertIn("Do not execute any task", prompt)
         self.assertIn("Maximum tasks: 64", prompt)
         self.assertEqual(opts["agentType"], "initial-orchestrator")
         self.assertNotIn("isolation", opts)
