@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - plan/reviewed-workflow-agent-behavior
+  pull_request:
+    branches:
+      - automation/reviewed-steps-3-4-base
 
 permissions:
   contents: write
@@ -25,11 +28,13 @@ jobs:
       - name: Apply, verify, and commit
         env:
           BASE_HEAD: 49d0151319f9e60fb0a1b5cfe1fd5d2cc0231821
-          PUSH_HEAD: ${{ github.sha }}
           TARGET_BRANCH: plan/reviewed-workflow-agent-behavior
+          TEMP_BASE: automation/reviewed-steps-3-4-base
+          TEMP_HEAD: automation/reviewed-steps-3-4-trigger
         shell: bash
         run: |
           set -euo pipefail
+          PUSH_HEAD=$(git rev-parse HEAD)
           cp .github/apply_steps_3_4.py /tmp/apply_steps_3_4.py
           git reset --hard "$BASE_HEAD"
 
@@ -64,3 +69,4 @@ jobs:
             docs/implementation-plans/reviewed-workflow-agent-behavior-repair.md
           git commit -m "feat(reviewed-workflow): isolate handoffs and align child capabilities"
           git push --force-with-lease="refs/heads/$TARGET_BRANCH:$PUSH_HEAD" origin "HEAD:refs/heads/$TARGET_BRANCH"
+          git push origin --delete "$TEMP_HEAD" "$TEMP_BASE" || true
