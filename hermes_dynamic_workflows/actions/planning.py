@@ -155,11 +155,14 @@ class InitialPlanningAction:
             "Construct the PlanPackage and call the structured_output tool directly to submit it. "
             "Do not search the repository for Python schema files or codebase contracts; the parameter "
             "schema is already embedded directly in your structured_output tool definition.\n\n"
+            "CRITICAL: You MUST construct the PlanPackage for the target objective below and call the "
+            "structured_output tool to submit it. Do NOT output plain text or refuse to plan.\n\n"
             f"Required cycle: {cycle}\n"
             f"Maximum tasks: {limits.max_tasks}\n"
             f"Maximum repairs per task: {limits.max_repairs_per_task}\n"
             f"Maximum replanning cycles: {limits.max_replanning_cycles}\n"
             "The package may select stricter repair/replanning limits, but must not exceed these caps.\n\n"
+            f"Target Objective: {objective}\n"
             f"Original objective (JSON string): {json.dumps(objective, ensure_ascii=False)}"
         )
 
