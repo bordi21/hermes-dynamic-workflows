@@ -1,0 +1,5 @@
+[console_scripts]
+hermes-workflows = hermes_dynamic_workflows.tui.app:main
+
+[hermes_agent.plugins]
+dynamic-workflows = hermes_dynamic_workflows.entry

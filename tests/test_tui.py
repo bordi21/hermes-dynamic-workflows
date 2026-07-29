@@ -142,6 +142,7 @@ class TuiTests(unittest.TestCase):
             record = original("wf_fake-completed")
             assert record is not None
             calls.clear()
+            time.sleep(0.01)
             store.save_run(record)
             repository.load()
             self.assertIn("wf_fake-completed", calls)

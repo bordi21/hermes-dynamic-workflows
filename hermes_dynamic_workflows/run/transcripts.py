@@ -91,7 +91,24 @@ class SessionTranscriptReader:
             reason = target.fallback_reason or self._incremental_reason or "incremental mode disabled"
             return self._read_full_fallback(target, reason)
         try:
-            return self._read_incremental(target, force_rebuild=force_rebuild)
+            res = self._read_incremental(target, force_rebuild=force_rebuild)
+            if not res.messages:
+                fallback_msgs = _load_session_messages(target.session_id)
+                if fallback_msgs:
+                    target.export_mode = "full_fallback"
+                    target.fallback_reason = "loaded via session reader fallback"
+                    target.lineage_session_ids = (target.session_id,)
+                    signature = _json_signature(fallback_msgs)
+                    action = "unchanged" if (signature == target.transcript_signature and not force_rebuild) else "rebuild"
+                    target.transcript_signature = signature
+                    return TranscriptRead(
+                        action=action,
+                        messages=fallback_msgs,
+                        export_mode="full_fallback",
+                        fallback_reason="loaded via session reader fallback",
+                        lineage_session_ids=(target.session_id,),
+                    )
+            return res
         except Exception as exc:
             reason = f"incremental read failed: {type(exc).__name__}: {exc}"
             target.export_mode = "full_fallback"
@@ -184,13 +201,16 @@ class SessionTranscriptReader:
         )
 
     def _read_full_fallback(self, target: LiveTranscriptTarget, reason: str) -> TranscriptRead:
+        messages = None
         if self._db is not None and callable(getattr(self._db, "get_messages", None)):
             try:
                 messages = self._db.get_messages(target.session_id, include_inactive=True)
             except TypeError:
                 messages = self._db.get_messages(target.session_id)
-        else:
-            messages = _load_session_messages(target.session_id)
+        if not messages:
+            fallback = _load_session_messages(target.session_id)
+            if fallback:
+                messages = fallback
         signature = _json_signature(messages)
         action = "unchanged" if signature == target.transcript_signature else "rebuild"
         target.transcript_signature = signature

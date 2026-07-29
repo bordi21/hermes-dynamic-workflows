@@ -16,7 +16,11 @@ class InstallerTests(unittest.TestCase):
         repository = Path(__file__).resolve().parent.parent
         installer = repository / "scripts" / "install-hermes-workflows.py"
         with tempfile.TemporaryDirectory() as home:
-            environment = {**os.environ, "HOME": home}
+            environment = {
+                **os.environ,
+                "HOME": home,
+                "HERMES_DYNAMIC_WORKFLOWS_HOME": str(Path(home) / ".hermes" / "dynamic-workflows"),
+            }
             installed = subprocess.run(
                 [sys.executable, str(installer)],
                 cwd=Path(home),

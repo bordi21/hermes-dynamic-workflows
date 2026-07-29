@@ -176,7 +176,7 @@ class FinalValidationActionTests(unittest.IsolatedAsyncioTestCase):
         prompt, opts = api.calls[0]
         self.assertIn("Validate the integrated project state", prompt)
         self.assertEqual(opts["agentType"], "final-orchestrator")
-        self.assertEqual(opts["isolation"], "shared")
+        self.assertNotIn("isolation", opts)
         snapshot = api.context.state.reviewed.snapshot()
         self.assertEqual(snapshot["planning_cycles"][0]["status"], "APPROVED")
         self.assertEqual(snapshot["final_validations"][0]["verdict"], "APPROVED")

@@ -1,0 +1,84 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-dynamic-workflow-init-001",
+  "cycle": 0,
+  "original_objective": "Create initial reviewed-workflow PlanPackage for objective under Ponytail mode guidelines (minimal diffs, root-cause fixes, shortest path to done, reuse existing components).",
+  "tasks": [
+    {
+      "schema_version": "1.0",
+      "plan_id": "plan-dynamic-workflow-init-001",
+      "task_id": "task-01-audit-and-validate-environment",
+      "objective": "Audit existing dynamic-workflow repository state, contracts, test coverage, and baseline invariants to ensure clean execution environment.",
+      "depends_on": [],
+      "paths": [
+        "/workspace/Projects/Hermes/04_AUTOMATION/dynamic-workflow/hermes_dynamic_workflows",
+        "/workspace/Projects/Hermes/04_AUTOMATION/dynamic-workflow/tests"
+      ],
+      "constraints": [
+        "Read-only inspection mode",
+        "Do not modify existing source code or test files during baseline check",
+        "Rely on existing test runner and contracts"
+      ],
+      "allowed_mutations": [],
+      "acceptance_criteria": [
+        "All existing test suites in dynamic-workflow pass without error",
+        "Contract schemas (PlanPackage, TaskPackage, ReviewPackage) match version 1.0 requirements",
+        "No unhandled exceptions or missing dependencies found"
+      ],
+      "evidence_requirements": [
+        "pytest output log demonstrating 100% pass rate",
+        "Verification log of schema validation checks"
+      ],
+      "worker_instructions": "Run pytest on /workspace/Projects/Hermes/04_AUTOMATION/dynamic-workflow/tests to verify existing test suite pass state. Confirm that contract definitions in hermes_dynamic_workflows/contracts match schema version 1.0.",
+      "reviewer_guidelines": [
+        "Verify that pytest output shows zero failures and zero errors",
+        "Confirm no workspace files were modified during the audit phase",
+        "Reject if any test fails or baseline environment is unstable"
+      ]
+    },
+    {
+      "schema_version": "1.0",
+      "plan_id": "plan-dynamic-workflow-init-001",
+      "task_id": "task-02-verify-workflow-execution-and-output",
+      "objective": "Verify end-to-end execution path for reviewed workflow planning and output package emission following Ponytail minimal-diff principles.",
+      "depends_on": [
+        "task-01-audit-and-validate-environment"
+      ],
+      "paths": [
+        "/workspace/Projects/Hermes/04_AUTOMATION/dynamic-workflow/hermes_dynamic_workflows",
+        "/workspace/Projects/Hermes/04_AUTOMATION/dynamic-workflow/tests"
+      ],
+      "constraints": [
+        "Reuse existing runner and action classes without adding redundant abstraction layers",
+        "Ensure shortest path to verified completion",
+        "All emitted packages must strictly pass validate_plan_package"
+      ],
+      "allowed_mutations": [
+        "/workspace/Projects/Hermes/04_AUTOMATION/dynamic-workflow/hermes_dynamic_workflows/actions/planning.py"
+      ],
+      "acceptance_criteria": [
+        "PlanPackage structure validates cleanly against validate_plan_package",
+        "Execution pipeline satisfies reviewed workflow invariants",
+        "No unnecessary files or boilerplate code created"
+      ],
+      "evidence_requirements": [
+        "Execution output showing successful PlanPackage validation",
+        "Diff log confirming minimal necessary modifications"
+      ],
+      "worker_instructions": "Execute task planning validation test flow. Verify that generated PlanPackages pass schema validation via validate_plan_package and that execution completes cleanly without regressions.",
+      "reviewer_guidelines": [
+        "Inspect the emitted PlanPackage data for schema compliance (schema_version '1.0', valid task DAG, required fields present)",
+        "Verify that code changes adhere to Ponytail principles (minimal diffs, no unnecessary abstractions)",
+        "Pass if PlanPackage validates and test execution completes with green status"
+      ]
+    }
+  ],
+  "final_validation_criteria": [
+    "All tasks in the workflow complete with PASS status from reviewer",
+    "The emitted PlanPackage satisfies all schema version 1.0 validation checks without errors",
+    "No regressions introduced in existing dynamic-workflow codebase or test suite",
+    "Ponytail execution constraints satisfied (minimal diffs, direct fixes, zero extraneous files)"
+  ],
+  "max_repairs_per_task": 2,
+  "max_replanning_cycles": 2
+}

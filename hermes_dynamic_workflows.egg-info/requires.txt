@@ -1,0 +1,5 @@
+jsonschema<5,>=4
+wcwidth<1,>=0.2
+
+[:platform_system == "Windows"]
+windows-curses>=2.4

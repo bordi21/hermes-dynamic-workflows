@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: hermes-dynamic-workflows
+Version: 0.1.0
+Summary: Claude-Code-style dynamic workflows for Hermes Agent
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: jsonschema<5,>=4
+Requires-Dist: wcwidth<1,>=0.2
+Requires-Dist: windows-curses>=2.4; platform_system == "Windows"
+Dynamic: license-file

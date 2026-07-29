@@ -63,7 +63,6 @@ class InitialPlanningAction:
                 "phase": "Planning",
                 "schema": PLAN_PACKAGE_SCHEMA,
                 "agentType": "initial-orchestrator",
-                "isolation": "shared",
             },
         )
         return self.register_plan(
@@ -152,7 +151,8 @@ class InitialPlanningAction:
             "paths, constraints, allowed mutations, acceptance criteria, evidence requirements, "
             "worker instructions, and separate reviewer guidelines. Dependencies must reference "
             "only tasks that appear earlier in the tasks array. Include evidence-based final "
-            "validation criteria. Do not execute, review, repair, or integrate any task.\n\n"
+            "validation criteria. Do not execute, review, repair, or integrate any task. "
+            "Construct the PlanPackage and call the structured_output tool directly to submit it.\n\n"
             f"Required cycle: {cycle}\n"
             f"Maximum tasks: {limits.max_tasks}\n"
             f"Maximum repairs per task: {limits.max_repairs_per_task}\n"

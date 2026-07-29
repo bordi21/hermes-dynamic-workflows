@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from hermes_dynamic_workflows.engine.cache import ResumeCache, agent_fingerprint, is_cache_miss
 from hermes_dynamic_workflows.core.config import PluginConfig
@@ -100,7 +101,8 @@ phase("scan")
 return await agent("inspect repo", {"label": "scan-agent"})
 """
         runner = FakeRunner()
-        result = run_workflow(script, WorkflowOptions(config=PluginConfig(), child_runner=runner))
+        with patch("hermes_dynamic_workflows.child.runner._discoverable_child_toolsets", return_value=[]):
+            result = run_workflow(script, WorkflowOptions(config=PluginConfig(), child_runner=runner))
 
         self.assertEqual(result.value, "scan-agent:inspect repo")
         self.assertEqual(result.agent_count, 1)

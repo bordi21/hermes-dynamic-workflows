@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
 import threading
@@ -209,6 +210,7 @@ return await agent("do it", {"label": "worker"})
                 config=PluginConfig(require_launch_approval=False),
             )
             with (
+                patch.dict(os.environ, {"HERMES_SESSION_KEY": ""}),
                 patch("hermes_dynamic_workflows.adapters.workflow.get_run_manager", return_value=manager),
                 patch(
                     "hermes_dynamic_workflows.child.runner.HermesChildAgentRunner",

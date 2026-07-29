@@ -51,7 +51,6 @@ class FinalValidationAction:
                 "phase": "Final Validation",
                 "schema": FINAL_VALIDATION_PACKAGE_SCHEMA,
                 "agentType": "final-orchestrator",
-                "isolation": "shared",
             },
         )
         validated = _validate_final_validation(

@@ -88,7 +88,7 @@ class InitialPlanningActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Do not execute, review, repair, or integrate", prompt)
         self.assertIn("Maximum tasks: 64", prompt)
         self.assertEqual(opts["agentType"], "initial-orchestrator")
-        self.assertEqual(opts["isolation"], "shared")
+        self.assertNotIn("isolation", opts)
         self.assertEqual(opts["phase"], "Planning")
         self.assertEqual(opts["schema"]["title"], "PlanPackage")
 
