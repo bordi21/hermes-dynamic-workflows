@@ -748,11 +748,14 @@ def _configure_child_tools(
             else:
                 searchable.append(definition)
 
-        assembled = assemble_tool_defs(
-            searchable,
-            config=ToolSearchConfig.from_raw({"enabled": "on"}),
-        )
-        child.tools = list(assembled.tool_defs) + direct
+        if allowed_tools:
+            child.tools = definitions
+        else:
+            assembled = assemble_tool_defs(
+                searchable,
+                config=ToolSearchConfig.from_raw({"enabled": "on"}),
+            )
+            child.tools = list(assembled.tool_defs) + direct
     except Exception:
         child.tools = _filter_child_tool_definitions(
             [
