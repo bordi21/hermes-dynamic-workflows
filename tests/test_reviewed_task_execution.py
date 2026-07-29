@@ -303,7 +303,7 @@ class ReviewedTaskExecutionActionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["status"], "CONFLICT")
         self.assertEqual(result["integration"]["status"], "CONFLICT")
-        self.assertEqual(api.context.state.reviewed.snapshot()["tasks"][0]["status"], "PASS")
+        self.assertEqual(api.context.state.reviewed.snapshot()["tasks"][0]["status"], "FAILED")
         event = next(item for item in api.context.events if item["type"] == "reviewed_task_integration")
         self.assertEqual(event["status"], "CONFLICT")
         self.assertEqual(event["summary"], "integration conflict")
