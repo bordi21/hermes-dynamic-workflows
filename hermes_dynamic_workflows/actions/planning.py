@@ -143,6 +143,33 @@ class InitialPlanningAction:
 
     def _prompt(self, *, objective: str, cycle: int) -> str:
         limits = self.limits
+        example_template = {
+            "schema_version": "1.0",
+            "plan_id": f"plan-cycle-{cycle}",
+            "cycle": cycle,
+            "original_objective": objective,
+            "tasks": [
+                {
+                    "schema_version": "1.0",
+                    "plan_id": f"plan-cycle-{cycle}",
+                    "task_id": "task-1-inspect-and-report",
+                    "objective": objective,
+                    "depends_on": [],
+                    "paths": ["."],
+                    "constraints": ["Do not make unnecessary changes."],
+                    "allowed_mutations": ["."],
+                    "acceptance_criteria": ["Target objective is executed and verified with evidence."],
+                    "evidence_requirements": ["Output from inspecting the file/environment."],
+                    "worker_instructions": "Inspect the requested target and report findings.",
+                    "reviewer_guidelines": ["Verify the worker provided concrete evidence for the objective."],
+                }
+            ],
+            "final_validation_criteria": [
+                "The original objective is satisfied with concrete evidence."
+            ],
+            "max_repairs_per_task": min(limits.max_repairs_per_task, 2),
+            "max_replanning_cycles": min(limits.max_replanning_cycles, 1),
+        }
         return (
             "Create the initial reviewed-workflow PlanPackage for the objective below.\n\n"
             "Preserve the objective exactly in original_objective. Normalize its requirements "
@@ -156,14 +183,14 @@ class InitialPlanningAction:
             "Do not search the repository for Python schema files or codebase contracts; the parameter "
             "schema is already embedded directly in your structured_output tool definition.\n\n"
             "CRITICAL: You MUST construct the PlanPackage for the target objective below and call the "
-            "structured_output tool to submit it. Do NOT output plain text or refuse to plan.\n\n"
+            "structured_output tool to submit it. Do NOT output plain text or browse unrelated files.\n\n"
             f"Required cycle: {cycle}\n"
             f"Maximum tasks: {limits.max_tasks}\n"
             f"Maximum repairs per task: {limits.max_repairs_per_task}\n"
-            f"Maximum replanning cycles: {limits.max_replanning_cycles}\n"
-            "The package may select stricter repair/replanning limits, but must not exceed these caps.\n\n"
+            f"Maximum replanning cycles: {limits.max_replanning_cycles}\n\n"
             f"Target Objective: {objective}\n"
-            f"Original objective (JSON string): {json.dumps(objective, ensure_ascii=False)}"
+            f"Original objective (JSON string): {json.dumps(objective, ensure_ascii=False)}\n\n"
+            f"Example valid PlanPackage structure:\n{json.dumps(example_template, indent=2)}"
         )
 
     def _validate_semantics(
